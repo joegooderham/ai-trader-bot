@@ -103,7 +103,10 @@ class IGClient:
         }
 
         response = httpx.post(url, json=payload, headers=headers, timeout=15)
-        response.raise_for_status()
+
+        if response.status_code != 200:
+            logger.error(f"IG auth failed {response.status_code}: {response.text}")
+            response.raise_for_status()
 
         self._cst            = response.headers.get("CST")
         self._security_token = response.headers.get("X-SECURITY-TOKEN")
@@ -272,16 +275,6 @@ class IGClient:
     ) -> Optional[dict]:
         """
         Open a new CFD position on IG.
-
-        Args:
-            pair:        e.g. "EUR_USD"
-            direction:   "BUY" or "SELL"
-            size:        Deal size in contracts (e.g. 1.0 = 1 mini contract)
-            stop_loss:   Stop loss price level (optional but strongly recommended)
-            take_profit: Take profit price level (optional)
-
-        Returns:
-            Dict with deal details if successful, None if failed.
         """
         epic = self._pair_to_epic(pair)
         if not epic:
@@ -312,7 +305,6 @@ class IGClient:
                 logger.error(f"No deal reference returned for {pair} {direction}")
                 return None
 
-            # Confirm the deal
             time.sleep(0.5)
             confirmation = self._get(f"/confirms/{deal_ref}")
             status = confirmation.get("dealStatus", "UNKNOWN")
@@ -344,15 +336,7 @@ class IGClient:
             return None
 
     def close_trade(self, deal_id: str, size: float, direction: str) -> Optional[dict]:
-        """
-        Close an open CFD position.
-
-        Args:
-            deal_id:   The IG deal ID of the position to close
-            size:      Size to close (usually the full position size)
-            direction: Original direction — we send the opposite to close
-                       (BUY position → send SELL to close)
-        """
+        """Close an open CFD position."""
         close_direction = "SELL" if direction.upper() == "BUY" else "BUY"
 
         payload = {
@@ -396,10 +380,7 @@ class IGClient:
             return None
 
     def close_all_positions(self) -> list:
-        """
-        Close every open position. Called at EOD (23:59 UTC) unless
-        the 98% overnight hold rule applies.
-        """
+        """Close every open position. Called at EOD."""
         open_trades = self.get_open_trades()
         results = []
 
@@ -425,10 +406,7 @@ class IGClient:
     # ── Open Positions ────────────────────────────────────────────────────────
 
     def get_open_trades(self) -> list:
-        """
-        Returns all currently open CFD positions.
-        Each item includes deal ID, pair, direction, size, P&L etc.
-        """
+        """Returns all currently open CFD positions."""
         try:
             data = self._get("/positions/otc")
             positions = data.get("positions", [])
@@ -447,9 +425,9 @@ class IGClient:
                     "instrument":    pair,
                     "direction":     position.get("direction"),
                     "dealSize":      position.get("dealSize"),
-                    "level":         position.get("level"),         # Entry price
+                    "level":         position.get("level"),
                     "currentUnits":  position.get("dealSize"),
-                    "unrealizedPL":  position.get("upl"),           # Unrealised P&L
+                    "unrealizedPL":  position.get("upl"),
                     "stopLevel":     position.get("stopLevel"),
                     "limitLevel":    position.get("limitLevel"),
                     "openTime":      position.get("createdDateUTC"),
@@ -472,7 +450,7 @@ class IGClient:
     # ── Utilities ─────────────────────────────────────────────────────────────
 
     def _pair_to_epic(self, pair: str) -> Optional[str]:
-        """Convert standard pair name to IG epic. e.g. EUR_USD → CS.D.EURUSD.MINI.IP"""
+        """Convert standard pair name to IG epic."""
         epic = IG_EPICS.get(pair)
         if not epic:
             logger.warning(f"No IG epic mapping found for pair: {pair}")
@@ -484,10 +462,7 @@ class IGClient:
         return reverse.get(epic, epic)
 
     def test_connection(self) -> bool:
-        """
-        Quick connection test — call this after initialising to verify
-        everything is working before the bot starts trading.
-        """
+        """Quick connection test."""
         try:
             balance = self.get_account_balance()
             logger.info(f"IG connection test passed — Balance: £{balance:.2f}")

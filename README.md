@@ -1,4 +1,4 @@
-# 🤖 AI Trader Bot
+# 🤖 Joseph's Forex Bot
 
 An AI-powered Forex day trading bot that runs 24/7, makes intelligent trade decisions using Claude AI, and keeps you informed via Telegram.
 

@@ -1,10 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Joseph's Forex Bot - Python Dependencies
+# AI Trader Bot - Python Dependencies
 # Install with: pip install -r requirements.txt
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Broker API
-oandapyV20==0.7.2              # Official OANDA REST API client
 
 # Data & Analysis
 pandas==2.1.4                  # Data manipulation and analysis

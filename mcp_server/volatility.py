@@ -86,7 +86,7 @@ async def get_volatility_details(pair: str) -> dict:
         }
     """
     try:
-        from broker.oanda_client import OandaClient
+        from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
         import pandas_ta as ta
 
         client = OandaClient()
@@ -153,7 +153,7 @@ async def get_volatility_details(pair: str) -> dict:
 async def _calculate_regime(pair: str) -> str:
     """Calculate the volatility regime from live price data."""
     try:
-        from broker.oanda_client import OandaClient
+        from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
         import pandas_ta as ta
 
         client = OandaClient()

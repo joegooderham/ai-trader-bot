@@ -100,6 +100,21 @@ SHOW_AI_REASONING = _cfg["notifications"]["show_ai_reasoning"]
 
 
 
+
+# ── IG Group Broker Settings ──────────────────────────────────────────────────
+IG_API_KEY    = os.getenv("IG_API_KEY", "")
+IG_USERNAME   = os.getenv("IG_USERNAME", "")
+IG_PASSWORD   = os.getenv("IG_PASSWORD", "")
+IG_ACCOUNT_ID = os.getenv("IG_ACCOUNT_ID", "")
+IG_ENVIRONMENT = os.getenv("IG_ENVIRONMENT", "demo")
+
+# Base URL switches automatically based on environment
+IG_BASE_URL = (
+    "https://demo-api.ig.com/gateway/deal"
+    if IG_ENVIRONMENT == "demo"
+    else "https://api.ig.com/gateway/deal"
+)
+
 # ── Instance / Multi-Bot Settings ────────────────────────────────────────────
 # These come from config.yaml instance section
 # Defaults mean single-instance mode — no changes needed for now

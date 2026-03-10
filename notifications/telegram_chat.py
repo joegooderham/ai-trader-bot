@@ -35,7 +35,7 @@ import httpx
 
 from bot import config
 from data.storage import TradeStorage
-from broker.oanda_client import OandaClient
+from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
 
 
 class TelegramChatHandler:

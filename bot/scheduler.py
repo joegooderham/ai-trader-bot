@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from bot import config
 from bot.engine import indicators, confidence
 from bot.engine.daily_plan import DailyPlanGenerator
-from broker.oanda_client import OandaClient
+from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
 from notifications.telegram_bot import TelegramNotifier
 from notifications.telegram_chat import TelegramChatHandler
 from risk.position_sizer import calculate_position_size

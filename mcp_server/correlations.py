@@ -166,7 +166,7 @@ async def _calculate_live_correlation(pair1: str, pair2: str, periods: int = 100
 
     try:
         # Import here to avoid circular imports
-        from broker.oanda_client import OandaClient
+        from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
         client = OandaClient()
 
         df1 = client.get_candles(pair1, count=periods, granularity="H1")

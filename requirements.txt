@@ -4,16 +4,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Broker API
+httpx==0.25.2                  # IG Group API client (async HTTP)
 
 # Data & Analysis
 pandas==2.1.4                  # Data manipulation and analysis
 numpy==1.26.2                  # Numerical computing
-pandas-ta==0.3.14b             # 100+ technical indicators (RSI, MACD, etc.)
+ta==0.11.0                     # Technical indicators (RSI, MACD, Bollinger Bands etc.)
 yfinance==0.2.36               # Free historical Forex data from Yahoo Finance
 
 # Machine Learning
 scikit-learn==1.3.2            # ML utilities (scaling, metrics)
-tensorflow==2.15.0             # LSTM neural network training & inference
 joblib==1.3.2                  # Model saving/loading
 
 # Scheduling
@@ -28,7 +28,6 @@ anthropic==0.23.1              # Claude API client for intelligent analysis
 # Web / API
 fastapi==0.109.0               # MCP server framework
 uvicorn==0.27.0                # ASGI server for FastAPI
-httpx==0.26.0                  # Async HTTP client
 requests==2.31.0               # HTTP requests
 
 # News & Sentiment

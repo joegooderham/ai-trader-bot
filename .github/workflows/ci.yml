@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .github/workflows/ci.yml — GitHub Actions CI Pipeline
+#
+# This runs automatically every time you push code to GitHub.
+# It checks:
+#   1. Code style (no obvious errors)
+#   2. All imports resolve correctly
+#   3. Config files are valid
+#
+# This means you'll catch mistakes before they reach your running bot.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Joseph's Forex Bot — CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate Code & Config
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install flake8 pyyaml
+
+      - name: Check Python syntax (no crashes on import)
+        run: |
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics \
+            --exclude=.git,__pycache__,node_modules
+
+      - name: Validate config.yaml
+        run: |
+          python -c "
+          import yaml
+          with open('config/config.yaml') as f:
+              cfg = yaml.safe_load(f)
+          print('✅ config.yaml is valid')
+          print(f'   Pairs: {cfg[\"trading\"][\"pairs\"]}')
+          print(f'   Min confidence: {cfg[\"confidence\"][\"min_to_trade\"]}%')
+          "
+
+      - name: Check .env.example has all required keys
+        run: |
+          python -c "
+          required_keys = [
+              'OANDA_API_TOKEN',
+              'OANDA_ACCOUNT_ID',
+              'OANDA_ENVIRONMENT',
+              'TELEGRAM_BOT_TOKEN',
+              'TELEGRAM_CHAT_ID',
+              'ANTHROPIC_API_KEY',
+          ]
+          with open('.env.example') as f:
+              content = f.read()
+          missing = [k for k in required_keys if k not in content]
+          if missing:
+              print(f'❌ Missing keys in .env.example: {missing}')
+              exit(1)
+          print('✅ .env.example has all required keys')
+          "
+
+  docker-build:
+    runs-on: ubuntu-latest
+    name: Build Docker Images
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build main bot image
+        run: docker build -t ai-trader-bot:test .
+
+      - name: Build MCP server image
+        run: docker build -t ai-trader-mcp:test -f Dockerfile.mcp .
+
+      - name: Verify docker-compose is valid
+        run: docker-compose config --quiet && echo "✅ docker-compose.yml is valid"

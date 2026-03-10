@@ -1,0 +1,194 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Joseph's Forex Bot - Trading Configuration
+#
+# Edit this file to customise how the bot trades.
+# All settings have clear explanations so you know exactly what each one does.
+# ─────────────────────────────────────────────────────────────────────────────
+
+trading:
+  # Which currency pairs to trade
+  # These are the most liquid major pairs with the tightest spreads
+  pairs:
+    - EUR_USD    # Euro / US Dollar (highest volume in the world)
+    - GBP_USD    # British Pound / US Dollar (volatile, good for day trading)
+    - USD_JPY    # US Dollar / Japanese Yen (very liquid)
+    - AUD_USD    # Australian Dollar / US Dollar
+    - USD_CAD    # US Dollar / Canadian Dollar
+
+  # How often to scan the market for new trade signals (in minutes)
+  # Lower = more frequent checks but higher API usage
+  scan_interval_minutes: 15
+
+  # Maximum number of positions open at the same time
+  # Keeping this low reduces overall risk exposure
+  max_open_positions: 5
+
+  # Risk per trade as a percentage of your total capital
+  # Example: 2% of £500 = £10 maximum loss per trade
+  per_trade_risk_pct: 2.0
+
+  # Candlestick timeframe for analysis
+  # Options: M5 (5min), M15 (15min), H1 (1hour), H4 (4hour)
+  timeframe: M15
+
+  # Number of historical candles to analyse for each signal
+  lookback_candles: 200
+
+confidence:
+  # ── Aggressiveness vs Risk Factor — what's the difference? ───────────────
+  #
+  # AGGRESSIVENESS controls how often the bot trades.
+  #   Lower min_confidence = bot trades more often (more aggressive)
+  #   Higher min_confidence = bot trades less often (more conservative)
+  #   Think of it as: how fast you're willing to drive.
+  #
+  # RISK FACTOR controls how much you lose when a trade goes wrong.
+  #   This is the per_trade_risk_pct setting in the [risk] section below.
+  #   Think of it as: your seatbelt. Limits damage when things go wrong.
+  #
+  # They are INDEPENDENT. You can be aggressive (low threshold) but safe
+  # (low risk %), or conservative (high threshold) but bold (high risk %).
+  # For month one, we recommend: aggressiveness=MEDIUM, risk=LOW.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # AGGRESSIVENESS presets (choose one by setting min_to_trade):
+  #   Conservative:  70  — fewer trades, only high-quality signals
+  #   Medium:        60  — balanced (recommended for month one)
+  #   Aggressive:    50  — more trades, accepts weaker signals
+  #   Very Aggressive: 40 — maximum trades (not recommended until proven)
+  aggressiveness_label: "medium"  # For your reference only — doesn't affect logic
+
+  # Minimum score (0-100) to open a trade
+  # Below this, the bot does nothing — better to miss a trade than lose money
+  min_to_trade: 60
+
+  # Score required to hold a position past end-of-day close
+  # This is intentionally very high — overnight holds should be rare
+  hold_overnight_threshold: 98
+
+  # Weighting of each component in the final confidence score
+  # All weights must add up to 100
+  weights:
+    lstm_model: 50          # AI neural network prediction
+    macd_rsi_consensus: 20  # MACD and RSI agreement
+    ema_trend_alignment: 15 # Short/long EMA trend direction
+    bollinger_position: 10  # Price position relative to Bollinger Bands
+    volume_confirmation: 5  # Volume validates the signal
+
+risk:
+  # Stop-loss distance as a multiple of ATR (Average True Range)
+  # ATR measures recent volatility — this makes stop-losses adaptive
+  stop_loss_atr_multiplier: 1.5
+
+  # Take-profit distance relative to stop-loss
+  # 2.0 means for every £1 you risk, you aim to make £2
+  take_profit_ratio: 2.0
+
+  # If the account loses this % in a single day, pause trading for 24 hours
+  # This prevents a bad day from becoming a catastrophe
+  daily_loss_circuit_breaker_pct: 10.0
+
+  # When holding overnight, tighten stop-loss to protect this % of profit
+  overnight_profit_protection_pct: 75.0
+
+schedule:
+  # Time (UTC) to close all positions at end of day
+  eod_close_time: "23:59"
+
+  # Time (UTC) to run the overnight hold evaluation (98% rule check)
+  eod_evaluation_time: "23:45"
+
+  # Time (UTC) to send the daily Telegram report
+  daily_report_time: "00:05"
+
+  # Day and time (UTC) to send the weekly Telegram report
+  weekly_report_day: "sunday"
+  weekly_report_time: "20:00"
+
+  # Day and time (UTC) to run the weekly market outlook analysis
+  weekly_analysis_day: "sunday"
+  weekly_analysis_time: "19:00"
+
+mcp:
+  # Which analysis modules to run before each trade decision
+  # Set to false to disable any module (useful for troubleshooting)
+  enable_economic_calendar: true
+  enable_sentiment_analysis: true
+  enable_correlation_analysis: true
+  enable_volatility_regime: true
+  enable_session_stats: true
+
+  # How long to cache MCP analysis results (minutes)
+  # Avoids re-fetching data on every single scan
+  cache_duration_minutes: 30
+
+  # Claude model to use for intelligent market analysis
+  claude_model: "claude-sonnet-4-20250514"
+
+  # Maximum tokens for Claude's analysis response
+  max_analysis_tokens: 1000
+
+data:
+  # Number of days of historical data to fetch on first startup
+  initial_history_days: 30
+
+  # Where to store data files (mapped to ./data folder via Docker volume)
+  local_data_dir: "/app/data"
+
+  # How many days of trade history to keep in local storage
+  trade_history_retention_days: 365
+
+notifications:
+  # Session timing info for context in notifications (your local timezone)
+  timezone: "Europe/London"
+
+  # Include confidence score breakdown in trade notifications
+  show_confidence_breakdown: true
+
+  # Include reasoning explanation in trade notifications
+  show_ai_reasoning: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-Instance Configuration
+#
+# This section future-proofs the bot for running multiple instances.
+# Right now you only have one instance — leave instance_id as "primary"
+# and active as true. Everything works exactly as before.
+#
+# When you're ready to add a second instance on another machine:
+#   1. Copy this entire project to the new machine
+#   2. Set instance_id to "secondary" on the new machine
+#   3. Change the pairs list to the pairs you want that instance to trade
+#   4. Both instances can share the same OANDA account safely —
+#      they each own different pairs so there's no overlap or double-trading
+#
+# Example split:
+#   Instance 1 (primary):   EUR_USD, GBP_USD, USD_CHF
+#   Instance 2 (secondary): USD_JPY, AUD_USD, USD_CAD
+#
+# The coordination_mode setting controls how instances interact:
+#   "independent" — each instance trades its own pairs, no cross-talk (default)
+#   "failover"    — secondary only activates if primary goes offline
+# ─────────────────────────────────────────────────────────────────────────────
+
+instance:
+  # Unique name for this instance — shown in Telegram messages and logs
+  # Options: "primary", "secondary", or any name you choose e.g. "london", "us"
+  instance_id: "primary"
+
+  # Whether this instance is actively trading
+  # Set to false to pause trading without stopping the container
+  active: true
+
+  # How multiple instances coordinate (only matters when running 2+)
+  # "independent" = each trades its own pairs, no communication needed
+  # "failover"    = secondary monitors primary and takes over if it goes offline
+  coordination_mode: "independent"
+
+  # Failover settings (only used when coordination_mode = "failover")
+  # How many seconds of silence before standby declares primary offline
+  failover_timeout_seconds: 120
+
+  # Heartbeat — how often this instance writes a "I'm alive" signal (seconds)
+  # Used by standby instances to detect if primary has gone offline
+  heartbeat_interval_seconds: 30

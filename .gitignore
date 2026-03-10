@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .gitignore — Files that should NEVER be committed to GitHub
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Your secret API keys — NEVER commit this
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Docker
+*.log
+
+# Data files (trade history stays local — push manually if you want backup)
+data/*.json
+logs/
+
+# ML model weights (large files — store separately if needed)
+models/*.h5
+models/*.pkl
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db

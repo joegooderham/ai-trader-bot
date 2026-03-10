@@ -1,0 +1,44 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Joseph's Forex Bot - Python Dependencies
+# Install with: pip install -r requirements.txt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Broker API
+oandapyV20==0.7.2              # Official OANDA REST API client
+
+# Data & Analysis
+pandas==2.1.4                  # Data manipulation and analysis
+numpy==1.26.2                  # Numerical computing
+pandas-ta==0.3.14b             # 100+ technical indicators (RSI, MACD, etc.)
+yfinance==0.2.36               # Free historical Forex data from Yahoo Finance
+
+# Machine Learning
+scikit-learn==1.3.2            # ML utilities (scaling, metrics)
+tensorflow==2.15.0             # LSTM neural network training & inference
+joblib==1.3.2                  # Model saving/loading
+
+# Scheduling
+APScheduler==3.10.4            # Task scheduling (run bot every 15 min, etc.)
+
+# Telegram Notifications
+python-telegram-bot==20.7      # Send trade alerts and reports to Telegram
+
+# Claude AI (MCP Analysis)
+anthropic==0.23.1              # Claude API client for intelligent analysis
+
+# Web / API
+fastapi==0.109.0               # MCP server framework
+uvicorn==0.27.0                # ASGI server for FastAPI
+httpx==0.26.0                  # Async HTTP client
+requests==2.31.0               # HTTP requests
+
+# News & Sentiment
+feedparser==6.0.11             # Parse RSS news feeds
+beautifulsoup4==4.12.3         # Web scraping for economic data
+lxml==5.1.0                    # HTML/XML parser
+
+# Configuration & Utilities
+python-dotenv==1.0.0           # Load .env file for API keys
+pyyaml==6.0.1                  # Parse config.yaml
+loguru==0.7.2                  # Beautiful, structured logging
+pytz==2024.1                   # Timezone handling

@@ -1,77 +1,70 @@
-version: "3.9"
-
 # ─────────────────────────────────────────────────────────────────────────────
 # AI Trader Bot - Docker Compose
-#
-# This file defines all the services that make up the bot.
-# Run everything with: docker-compose up -d
-# Stop everything with: docker-compose down
-# View logs with:       docker-compose logs -f
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
 
-  # ── Main Trading Bot ────────────────────────────────────────────────────────
-  # This is the core service. It runs the scheduler, executes trades,
-  # manages risk, and coordinates everything else.
   forex-bot:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: ai-trader-bot
-    restart: unless-stopped          # Auto-restart if it crashes
-    env_file:
-      - .env                         # Your API keys and secrets (never commit this)
+    restart: unless-stopped
+    environment:
+      - IG_API_KEY=${IG_API_KEY}
+      - IG_ACCOUNT_ID=${IG_ACCOUNT_ID}
+      - IG_USERNAME=${IG_USERNAME}
+      - IG_PASSWORD=${IG_PASSWORD}
+      - IG_ENVIRONMENT=${IG_ENVIRONMENT}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
-      - ./data:/app/data             # Persists trading history and cached data
-      - ./logs:/app/logs             # Persists logs so you can review them
-      - ./config:/app/config         # Your configuration files
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
     depends_on:
       - mcp-server
     networks:
       - forex-network
-    healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health')"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
-  # ── MCP Analysis Server ─────────────────────────────────────────────────────
-  # This service provides market context to the AI before every trade decision.
-  # It fetches economic calendars, news sentiment, correlation data, and more.
-  # Think of it as the "research desk" that the trading bot consults.
   mcp-server:
     build:
       context: .
       dockerfile: Dockerfile.mcp
     container_name: ai-trader-mcp
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      - IG_API_KEY=${IG_API_KEY}
+      - IG_ACCOUNT_ID=${IG_ACCOUNT_ID}
+      - IG_USERNAME=${IG_USERNAME}
+      - IG_PASSWORD=${IG_PASSWORD}
+      - IG_ENVIRONMENT=${IG_ENVIRONMENT}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
-      - ./data:/app/data             # Shared data folder with the main bot
+      - ./data:/app/data
     ports:
-      - "8090:8090"                  # MCP server listens on this port
+      - "8090:8090"
     networks:
       - forex-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
 
-  # ── Health Monitor ──────────────────────────────────────────────────────────
-  # Watches all other services and sends Telegram alerts if anything goes wrong.
-  # This is your "eyes" when you're away from the machine.
   health-monitor:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: ai-trader-health
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      - IG_API_KEY=${IG_API_KEY}
+      - IG_ACCOUNT_ID=${IG_ACCOUNT_ID}
+      - IG_USERNAME=${IG_USERNAME}
+      - IG_PASSWORD=${IG_PASSWORD}
+      - IG_ENVIRONMENT=${IG_ENVIRONMENT}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     command: ["python", "-m", "scripts.health_monitor"]
     depends_on:
       - forex-bot

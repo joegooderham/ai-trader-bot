@@ -331,7 +331,7 @@ class IGClient:
                 }
             else:
                 reason = confirmation.get("reason", "Unknown reason")
-                logger.error(f"Trade rejected: {pair} {direction} — {reason}")
+                logger.error(f"Trade rejected: {pair} {direction} — {reason} | Full response: {confirmation}")
                 return None
 
         except Exception as e:

@@ -19,7 +19,7 @@ Run with: python -m bot.scheduler
 import sys
 import asyncio
 import threading
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 from datetime import datetime, timezone
@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from bot import config
 from bot.engine import indicators, confidence
 from bot.engine.daily_plan import DailyPlanGenerator
-from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
+from broker.ig_client import IGClient as OandaClient
 from notifications.telegram_bot import TelegramNotifier
 from notifications.telegram_chat import TelegramChatHandler
 from risk.position_sizer import calculate_position_size
@@ -109,9 +109,7 @@ def scan_markets():
 
 
 def _evaluate_pair(pair: str, available_capital: float):
-    """
-    Evaluate a single currency pair and trade if conditions are right.
-    """
+    """Evaluate a single currency pair and trade if conditions are right."""
     candles = broker.get_candles(pair, count=config.LOOKBACK_CANDLES, granularity=config.TIMEFRAME)
     if candles is None or len(candles) < 60:
         logger.warning(f"Insufficient candle data for {pair}")
@@ -144,7 +142,6 @@ def _evaluate_pair(pair: str, available_capital: float):
         logger.warning(f"Calculated 0 size for {pair} — skipping trade")
         return
 
-    # Place the trade — IGClient accepts: pair, direction, size, stop_loss, take_profit
     trade_result = broker.place_trade(
         pair=pair,
         direction=result.direction,
@@ -170,9 +167,7 @@ def _evaluate_pair(pair: str, available_capital: float):
 
 
 def monitor_positions():
-    """
-    Monitor all open positions every 5 minutes.
-    """
+    """Monitor all open positions every 5 minutes."""
     open_trades = broker.get_open_trades()
     if not open_trades:
         return
@@ -183,18 +178,16 @@ def monitor_positions():
 
 
 def eod_evaluation():
-    """
-    Runs at 23:45 UTC — evaluates all open positions for the 98% overnight rule.
-    """
+    """Runs at 23:45 UTC — evaluates all open positions for the 98% overnight rule."""
     logger.info("Running end-of-day position evaluation (98% rule check)")
     eod_manager.evaluate_overnight_holds()
 
 
 def force_close_all():
-    """
-    Runs at 23:59 UTC — closes every remaining open position.
-    """
+    """Runs at 23:59 UTC — closes every remaining open position."""
     logger.info("Running end-of-day force close")
+    # Clear candle cache at day rollover so fresh data loads tomorrow
+    broker.clear_candle_cache()
     close_results = eod_manager.force_close_non_held_positions()
 
     if close_results:
@@ -321,7 +314,9 @@ def main():
     instance_manager.start()
     notifier.startup_message()
 
-    scheduler = BlockingScheduler(timezone="UTC")
+    # BackgroundScheduler runs in a daemon thread, freeing the main thread
+    # for the Telegram polling loop (which requires the main thread)
+    scheduler = BackgroundScheduler(timezone="UTC")
 
     scheduler.add_job(
         scan_markets, "interval",
@@ -335,9 +330,9 @@ def main():
         id="position_monitor", name="Position Monitor"
     )
 
-    eod_eval_h,   eod_eval_m   = config.EOD_EVALUATION_TIME.split(":")
-    eod_close_h,  eod_close_m  = config.EOD_CLOSE_TIME.split(":")
-    report_h,     report_m     = config.DAILY_REPORT_TIME.split(":")
+    eod_eval_h,        eod_eval_m   = config.EOD_EVALUATION_TIME.split(":")
+    eod_close_h,       eod_close_m  = config.EOD_CLOSE_TIME.split(":")
+    report_h,          report_m     = config.DAILY_REPORT_TIME.split(":")
     weekly_report_h,   weekly_report_m   = config.WEEKLY_REPORT_TIME.split(":")
     weekly_analysis_h, weekly_analysis_m = config.WEEKLY_ANALYSIS_TIME.split(":")
 
@@ -381,31 +376,26 @@ def main():
     for job in scheduler.get_jobs():
         logger.info(f"   - {job.name}")
 
-    # Start Telegram chat handler in a separate thread with its own event loop
-    def run_chat_handler():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            logger.info("🤖 Starting Telegram chat interface...")
-            chat_app = chat_handler.build_app()
-            chat_app.run_polling(drop_pending_updates=True)
-        except Exception as e:
-            logger.error(f"Telegram chat handler error: {e}")
-        finally:
-            loop.close()
+    scheduler.start()
 
-    chat_thread = threading.Thread(target=run_chat_handler, daemon=True)
-    chat_thread.start()
-    logger.info("✅ Telegram chat interface started")
+    # Run initial market scan in a background thread so it doesn't
+    # block the Telegram polling loop from starting
+    threading.Thread(target=scan_markets, daemon=True).start()
 
-    logger.info("Running initial market scan...")
-    scan_markets()
-
+    # Run Telegram chat handler in the main thread — this is required because
+    # set_wakeup_fd (used internally by python-telegram-bot) only works in
+    # the main thread of the main interpreter
+    logger.info("🤖 Starting Telegram chat interface in main thread...")
     try:
-        scheduler.start()
+        chat_app = chat_handler.build_app()
+        chat_app.run_polling(drop_pending_updates=True)
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
+        scheduler.shutdown()
         notifier._send("⚠️ *Bot Stopped* — manually stopped by user.")
+    except Exception as e:
+        logger.error(f"Telegram polling error: {e}")
+        scheduler.shutdown()
 
 
 if __name__ == "__main__":

@@ -18,9 +18,6 @@ How it works:
   4. It sends everything to Claude AI with your question
   5. Claude reasons over the data and replies in plain English
   6. You get an intelligent, contextual answer back in Telegram
-
-Every answer is powered by Claude — so it's not a rigid command system.
-You can ask in any way you like and it will understand.
 """
 
 import asyncio
@@ -35,7 +32,7 @@ import httpx
 
 from bot import config
 from data.storage import TradeStorage
-from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
+from broker.ig_client import IGClient as OandaClient
 
 
 class TelegramChatHandler:
@@ -53,7 +50,6 @@ class TelegramChatHandler:
         self.app = None
 
         # Conversation history per chat — allows follow-up questions
-        # e.g. "tell me more about that" after a previous answer
         self._conversation_history = {}
 
     def build_app(self) -> Application:
@@ -64,10 +60,7 @@ class TelegramChatHandler:
             .build()
         )
 
-        # Handle all text messages as questions
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_question))
-
-        # Shortcut commands for common questions
         self.app.add_handler(CommandHandler("today", self.cmd_today))
         self.app.add_handler(CommandHandler("positions", self.cmd_positions))
         self.app.add_handler(CommandHandler("health", self.cmd_health))
@@ -122,15 +115,7 @@ class TelegramChatHandler:
         context: ContextTypes.DEFAULT_TYPE,
         override_question: str = None
     ):
-        """
-        Main handler — called for every message you send to the bot.
-
-        Steps:
-        1. Acknowledge the message (typing indicator)
-        2. Gather all live bot data
-        3. Send to Claude with your question
-        4. Reply with Claude's answer
-        """
+        """Main handler — called for every message you send to the bot."""
         chat_id = str(update.effective_chat.id)
         question = override_question or update.message.text
 
@@ -141,46 +126,37 @@ class TelegramChatHandler:
 
         logger.info(f"Chat question received: {question[:80]}")
 
-        # Show typing indicator while we fetch data and call Claude
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
         try:
-            # Gather all the live data Claude needs to answer intelligently
             bot_data = await self._gather_bot_data()
 
-            # Get or initialise conversation history for this chat
             if chat_id not in self._conversation_history:
                 self._conversation_history[chat_id] = []
 
-            # Build the message for Claude
             self._conversation_history[chat_id].append({
                 "role": "user",
                 "content": question
             })
 
-            # Call Claude with full context
             response = await self._ask_claude(
                 question=question,
                 bot_data=bot_data,
                 conversation_history=self._conversation_history[chat_id]
             )
 
-            # Store Claude's response for follow-up context
             self._conversation_history[chat_id].append({
                 "role": "assistant",
                 "content": response
             })
 
-            # Keep conversation history to last 10 exchanges (memory management)
+            # Keep last 10 exchanges only
             if len(self._conversation_history[chat_id]) > 20:
                 self._conversation_history[chat_id] = self._conversation_history[chat_id][-20:]
 
-            # Send the response back to Telegram
-            # Split long responses if needed (Telegram has a 4096 char limit)
             if len(response) <= 4096:
                 await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
             else:
-                # Split at natural paragraph boundaries
                 chunks = _split_message(response, 4096)
                 for chunk in chunks:
                     await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
@@ -190,24 +166,13 @@ class TelegramChatHandler:
             logger.error(f"Error handling chat question: {e}")
             await update.message.reply_text(
                 "⚠️ Sorry, I had trouble getting that information. "
-                "Check `docker-compose logs forex-bot` for details."
+                "Check `docker logs ai-trader-bot` for details."
             )
 
     # ── Data Gathering ────────────────────────────────────────────────────────
 
     async def _gather_bot_data(self) -> dict:
-        """
-        Collect all live and historical data from the bot.
-        This is the full context Claude uses to answer your questions.
-
-        Everything Claude needs to give an intelligent answer is gathered here:
-        - Current account balance and open positions
-        - Today's trade history
-        - This week's trades
-        - All-time performance stats
-        - System health status
-        - Tomorrow's economic calendar
-        """
+        """Collect all live and historical data from the bot for Claude to reason over."""
         data = {}
         now = datetime.now(timezone.utc)
 
@@ -218,12 +183,12 @@ class TelegramChatHandler:
             data["open_positions"] = []
             for t in open_trades:
                 data["open_positions"].append({
-                    "pair": t.get("instrument", "").replace("_", "/"),
-                    "direction": "BUY" if int(t.get("currentUnits", 0)) > 0 else "SELL",
-                    "units": abs(int(t.get("currentUnits", 0))),
-                    "open_price": float(t.get("price", 0)),
+                    "pair":         t.get("instrument", "").replace("_", "/"),
+                    "direction":    t.get("direction", ""),
+                    "units":        t.get("dealSize", 0),
+                    "open_price":   float(t.get("price", 0)),
                     "unrealised_pl": float(t.get("unrealizedPL", 0)),
-                    "opened_at": t.get("openTime", ""),
+                    "opened_at":    t.get("openTime", ""),
                 })
         except Exception as e:
             data["account_error"] = str(e)
@@ -233,13 +198,13 @@ class TelegramChatHandler:
         today = now.strftime("%Y-%m-%d")
         today_trades = self.storage.get_trades_for_date(today)
         data["today"] = {
-            "date": today,
-            "trades": today_trades,
-            "total_trades": len(today_trades),
-            "wins": len([t for t in today_trades if t.get("pl", 0) > 0]),
-            "losses": len([t for t in today_trades if t.get("pl", 0) <= 0 and "pl" in t]),
-            "net_pl": round(sum(t.get("pl", 0) for t in today_trades), 2),
-            "pairs_traded": list(set(t.get("pair", "") for t in today_trades)),
+            "date":          today,
+            "trades":        today_trades,
+            "total_trades":  len(today_trades),
+            "wins":          len([t for t in today_trades if t.get("pl", 0) > 0]),
+            "losses":        len([t for t in today_trades if t.get("pl", 0) <= 0 and "pl" in t]),
+            "net_pl":        round(sum(t.get("pl", 0) for t in today_trades), 2),
+            "pairs_traded":  list(set(t.get("pair", "") for t in today_trades)),
         }
 
         # ── This Week's Trades ────────────────────────────────────────────────
@@ -251,19 +216,19 @@ class TelegramChatHandler:
 
         data["this_week"] = {
             "total_trades": len(week_trades),
-            "net_pl": round(sum(t.get("pl", 0) for t in week_trades), 2),
-            "win_rate": round(
+            "net_pl":       round(sum(t.get("pl", 0) for t in week_trades), 2),
+            "win_rate":     round(
                 len([t for t in week_trades if t.get("pl", 0) > 0]) / len(week_trades) * 100, 1
             ) if week_trades else 0,
-            "pl_by_pair": pair_pl_week,
-            "best_pair": max(pair_pl_week, key=pair_pl_week.get) if pair_pl_week else None,
-            "worst_pair": min(pair_pl_week, key=pair_pl_week.get) if pair_pl_week else None,
+            "pl_by_pair":   pair_pl_week,
+            "best_pair":    max(pair_pl_week, key=pair_pl_week.get) if pair_pl_week else None,
+            "worst_pair":   min(pair_pl_week, key=pair_pl_week.get) if pair_pl_week else None,
         }
 
         # ── All-Time Stats ────────────────────────────────────────────────────
         data["all_time_stats"] = self.storage.get_summary_stats()
 
-        # ── Last 5 Trades (with reasoning) ───────────────────────────────────
+        # ── Last 5 Trades ─────────────────────────────────────────────────────
         all_trades = self.storage.get_all_trades()
         data["recent_trades"] = all_trades[-5:] if all_trades else []
 
@@ -272,21 +237,21 @@ class TelegramChatHandler:
 
         # ── Config Summary ────────────────────────────────────────────────────
         data["bot_config"] = {
-            "environment": config.OANDA_ENVIRONMENT,
-            "max_capital": config.MAX_CAPITAL,
-            "pairs_trading": config.PAIRS,
-            "min_confidence": config.MIN_CONFIDENCE_SCORE,
+            "environment":          config.IG_ENVIRONMENT,
+            "max_capital":          config.MAX_CAPITAL,
+            "pairs_trading":        config.PAIRS,
+            "min_confidence":       config.MIN_CONFIDENCE_SCORE,
             "scan_interval_minutes": config.SCAN_INTERVAL_MINUTES,
-            "max_open_positions": config.MAX_OPEN_POSITIONS,
+            "max_open_positions":   config.MAX_OPEN_POSITIONS,
         }
 
-        # ── Tomorrow's Calendar (from MCP server) ─────────────────────────────
+        # ── Market Outlook (from MCP server) ──────────────────────────────────
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.get("http://mcp-server:8090/weekly-outlook")
                 data["market_outlook"] = response.json().get("claude_analysis", "Not available")
         except Exception:
-            data["market_outlook"] = "MCP server not available for tomorrow's outlook"
+            data["market_outlook"] = "MCP server not available"
 
         data["current_time_utc"] = now.isoformat()
 
@@ -296,7 +261,6 @@ class TelegramChatHandler:
         """Quick health check on all services."""
         health = {}
 
-        # Check MCP server
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get("http://mcp-server:8090/health")
@@ -304,12 +268,11 @@ class TelegramChatHandler:
         except Exception:
             health["mcp_server"] = "❌ Offline"
 
-        # Check OANDA connection
         try:
             balance = self.broker.get_account_balance()
-            health["oanda_api"] = f"✅ Connected (Balance: £{balance:.2f})"
+            health["ig_api"] = f"✅ Connected (Balance: £{balance:.2f})"
         except Exception:
-            health["oanda_api"] = "❌ Cannot connect"
+            health["ig_api"] = "❌ Cannot connect"
 
         health["last_checked"] = datetime.now(timezone.utc).strftime("%H:%M UTC")
         return health
@@ -322,18 +285,9 @@ class TelegramChatHandler:
         bot_data: dict,
         conversation_history: list
     ) -> str:
-        """
-        Send the question and all bot data to Claude for an intelligent answer.
-
-        Claude receives:
-        - Full live trading data (positions, P&L, history)
-        - The user's question
-        - Previous conversation history (for follow-up questions)
-
-        Claude responds in plain English, formatted nicely for Telegram.
-        """
+        """Send the question and all bot data to Claude for an intelligent answer."""
         system_prompt = f"""You are the AI assistant for Joseph's personal Forex trading bot.
-        
+
 Joseph can ask you anything about his bot's trading activity, performance, and status.
 You have access to all live and historical trading data provided below.
 
@@ -343,7 +297,6 @@ Your job is to:
 3. Use simple language — no jargon unless Joseph uses it first
 4. Flag anything concerning (unusual losses, system issues, risky patterns)
 5. When relevant, suggest actionable improvements to config or strategy
-6. For "plan for tomorrow" questions, look at upcoming economic events and recent performance to give a genuine strategic view
 
 Formatting rules for Telegram:
 - Use *bold* for important numbers and headers
@@ -356,18 +309,10 @@ Current bot data:
 {json.dumps(bot_data, indent=2, default=str)}
 """
 
-        # Build messages — include conversation history for follow-up context
         messages = []
-
-        # Add previous exchanges (excluding the current question which is last)
         for msg in conversation_history[:-1]:
             messages.append(msg)
-
-        # Add current question with full data context
-        messages.append({
-            "role": "user",
-            "content": question
-        })
+        messages.append({"role": "user", "content": question})
 
         try:
             loop = asyncio.get_event_loop()

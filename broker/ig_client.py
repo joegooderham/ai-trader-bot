@@ -42,6 +42,21 @@ IG_EPICS = {
     "NZD_USD": "CS.D.NZDUSD.MINI.IP",
 }
 
+# Dealing currency for each pair's IG mini CFD
+# This is the currency IG uses to denominate P&L for each instrument
+IG_DEAL_CURRENCY = {
+    "EUR_USD": "USD",
+    "GBP_USD": "USD",
+    "USD_JPY": "JPY",
+    "AUD_USD": "USD",
+    "USD_CAD": "CAD",
+    "USD_CHF": "CHF",
+    "GBP_JPY": "JPY",
+    "EUR_GBP": "GBP",
+    "EUR_JPY": "JPY",
+    "NZD_USD": "USD",
+}
+
 # IG resolution strings for candle data
 IG_RESOLUTIONS = {
     "M1":  "MINUTE",
@@ -288,6 +303,9 @@ class IGClient:
         # IG mini contracts: minimum size 1, rounded to 1 decimal place
         size = max(1.0, round(float(size), 1))
 
+        # Each instrument has its own dealing currency (not always GBP)
+        currency_code = IG_DEAL_CURRENCY.get(pair, "USD")
+
         payload = {
             "epic":           epic,
             "expiry":         "-",
@@ -297,6 +315,7 @@ class IGClient:
             "timeInForce":    "EXECUTE_AND_ELIMINATE",
             "guaranteedStop": False,
             "forceOpen":      True,
+            "currencyCode":   currency_code,
         }
 
         # SL/TP temporarily disabled for bare order test

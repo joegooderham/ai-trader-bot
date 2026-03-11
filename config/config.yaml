@@ -29,10 +29,10 @@ trading:
 
   # Candlestick timeframe for analysis
   # Options: M5 (5min), M15 (15min), H1 (1hour), H4 (4hour)
-  timeframe: M15
+  timeframe: H1
 
   # Number of historical candles to analyse for each signal
-  lookback_candles: 200
+  lookback_candles: 60
 
 confidence:
   # ── Aggressiveness vs Risk Factor — what's the difference? ───────────────

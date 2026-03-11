@@ -17,6 +17,12 @@ Authentication:
 Environments:
   Demo: https://demo-api.ig.com/gateway/deal
   Live: https://api.ig.com/gateway/deal
+
+Data Allowance Strategy (IG demo = 10,000 points/week):
+  - On first call: fetch full lookback (60 candles)         = 60 points
+  - On subsequent calls within same candle period: use cache = 0 points
+  - When a new candle period opens: top up with 3 candles   = 3 points
+  - 5 pairs × (60 + 3×96 scans/day × 7 days) ≈ 1,320/week  ✅
 """
 
 import httpx
@@ -68,6 +74,18 @@ IG_RESOLUTIONS = {
     "W":   "WEEK",
 }
 
+# How many minutes each timeframe candle covers — used for cache expiry logic
+TIMEFRAME_MINUTES = {
+    "M1":  1,
+    "M5":  5,
+    "M15": 15,
+    "M30": 30,
+    "H1":  60,
+    "H4":  240,
+    "D":   1440,
+    "W":   10080,
+}
+
 
 class IGClient:
     """
@@ -89,6 +107,11 @@ class IGClient:
         self._cst = None
         self._security_token = None
         self._session_expires = None
+
+        # ── Candle cache ─────────────────────────────────────────────────────
+        # Stores { (pair, granularity): {"df": DataFrame, "last_candle_time": datetime} }
+        # Avoids re-fetching all 60 candles on every scan — only tops up new ones.
+        self._candle_cache: dict = {}
 
         self._authenticate()
         env = "DEMO" if "demo" in self.base_url else "LIVE ⚠️"
@@ -259,19 +282,80 @@ class IGClient:
     def get_candles(
         self,
         pair: str,
-        count: int = 100,
+        count: int = 60,
         granularity: str = "H1"
     ) -> Optional[pd.DataFrame]:
-        """Fetch OHLCV candlestick data for a pair."""
-        epic = self._pair_to_epic(pair)
-        if not epic:
+        """
+        Fetch OHLCV candlestick data for a pair, using a cache to minimise
+        IG API data point consumption.
+
+        Strategy:
+          - First call: fetch full `count` candles from IG, store in cache.
+          - Subsequent calls within the same candle period: return cache as-is.
+          - When a new candle period has opened: fetch only 3 candles (top-up),
+            append to cache, trim to `count` rows, update cache.
+
+        This reduces IG data usage from ~28,800 points/day to ~1,320/week.
+        """
+        epic = IG_RESOLUTIONS.get(granularity, "HOUR")
+        cache_key = (pair, granularity)
+        candle_minutes = TIMEFRAME_MINUTES.get(granularity, 60)
+        now = datetime.now(timezone.utc)
+
+        cached = self._candle_cache.get(cache_key)
+
+        if cached is not None:
+            last_candle_time = cached["last_candle_time"]
+            next_candle_time = last_candle_time + timedelta(minutes=candle_minutes)
+
+            if now < next_candle_time:
+                # Still within the same candle period — return cache unchanged
+                logger.debug(f"Cache hit for {pair} {granularity} — no API call needed")
+                return cached["df"]
+
+            # New candle period has opened — top up with just 3 candles
+            logger.debug(f"Cache top-up for {pair} {granularity} — fetching 3 candles")
+            new_df = self._fetch_candles_from_ig(pair, count=3, granularity=granularity)
+            if new_df is not None and not new_df.empty:
+                combined = pd.concat([cached["df"], new_df])
+                combined = combined[~combined.index.duplicated(keep="last")]
+                combined = combined.sort_index().tail(count)
+                self._candle_cache[cache_key] = {
+                    "df":               combined,
+                    "last_candle_time": combined.index[-1].to_pydatetime(),
+                }
+                return combined
+            else:
+                # Top-up failed — return stale cache rather than nothing
+                logger.warning(f"Cache top-up failed for {pair} — returning stale cache")
+                return cached["df"]
+
+        # No cache yet — do the full fetch
+        logger.debug(f"Cache miss for {pair} {granularity} — fetching {count} candles")
+        df = self._fetch_candles_from_ig(pair, count=count, granularity=granularity)
+        if df is not None and not df.empty:
+            self._candle_cache[cache_key] = {
+                "df":               df,
+                "last_candle_time": df.index[-1].to_pydatetime(),
+            }
+        return df
+
+    def _fetch_candles_from_ig(
+        self,
+        pair: str,
+        count: int,
+        granularity: str,
+    ) -> Optional[pd.DataFrame]:
+        """Raw candle fetch from IG API — always hits the network."""
+        ig_epic = self._pair_to_epic(pair)
+        if not ig_epic:
             return None
 
         resolution = IG_RESOLUTIONS.get(granularity, "HOUR")
 
         try:
             data = self._get(
-                f"/prices/{epic}?resolution={resolution}&max={count}&pageSize=0",
+                f"/prices/{ig_epic}?resolution={resolution}&max={count}&pageSize=0",
                 version="3"
             )
             prices = data.get("prices", [])
@@ -300,6 +384,20 @@ class IGClient:
         except Exception as e:
             logger.error(f"get_candles({pair}, {granularity}) failed: {e}")
             return None
+
+    def clear_candle_cache(self, pair: Optional[str] = None):
+        """
+        Clear the candle cache. Pass a pair to clear just that pair,
+        or call with no args to wipe everything (e.g. at day rollover).
+        """
+        if pair:
+            keys = [k for k in self._candle_cache if k[0] == pair]
+            for k in keys:
+                del self._candle_cache[k]
+            logger.debug(f"Candle cache cleared for {pair}")
+        else:
+            self._candle_cache.clear()
+            logger.debug("Candle cache fully cleared")
 
     # ── Trading ───────────────────────────────────────────────────────────────
 

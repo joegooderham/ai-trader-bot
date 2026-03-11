@@ -125,6 +125,23 @@ class IGClient:
                 "IG authentication failed — no session tokens returned. "
                 "Check IG_USERNAME, IG_PASSWORD and IG_API_KEY in your secrets."
             )
+
+        # Switch to the correct account explicitly
+        switch_headers = {
+            "Content-Type":     "application/json; charset=UTF-8",
+            "Accept":           "application/json; charset=UTF-8",
+            "X-IG-API-KEY":     self.api_key,
+            "CST":              self._cst,
+            "X-SECURITY-TOKEN": self._security_token,
+            "Version":          "1",
+        }
+        switch_payload = {"accountId": self.account_id, "defaultAccount": True}
+        switch_response = httpx.put(url, json=switch_payload, headers=switch_headers, timeout=15)
+        if switch_response.status_code == 200:
+            logger.debug(f"Switched to account {self.account_id}")
+        else:
+            logger.warning(f"Account switch returned {switch_response.status_code}: {switch_response.text}")
+
         logger.debug("IG session authenticated successfully")
 
     def _headers(self, version: str = "1") -> dict:

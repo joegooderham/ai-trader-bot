@@ -300,10 +300,11 @@ class IGClient:
             "currencyCode":   "GBP",
         }
 
-        if stop_loss:
-            payload["stopLevel"] = round(stop_loss, 5)
-        if take_profit:
-            payload["limitLevel"] = round(take_profit, 5)
+        # SL/TP temporarily disabled for bare order test
+        # if stop_loss:
+        #     payload["stopLevel"] = round(stop_loss, 5)
+        # if take_profit:
+        #     payload["limitLevel"] = round(take_profit, 5)
 
         try:
             response = self._post("/positions/otc", payload, version="2")

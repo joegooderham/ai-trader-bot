@@ -71,10 +71,10 @@ class IGClient:
     """
 
     def __init__(self):
-        self.base_url = config.IG_BASE_URL
-        self.api_key  = config.IG_API_KEY
-        self.username = config.IG_USERNAME
-        self.password = config.IG_PASSWORD
+        self.base_url   = config.IG_BASE_URL
+        self.api_key    = config.IG_API_KEY
+        self.username   = config.IG_USERNAME
+        self.password   = config.IG_PASSWORD
         self.account_id = config.IG_ACCOUNT_ID
 
         # Session tokens — refreshed automatically every 5.5 hours
@@ -92,10 +92,10 @@ class IGClient:
         """Log in to IG and obtain session tokens."""
         url = f"{self.base_url}/session"
         headers = {
-            "Content-Type":  "application/json; charset=UTF-8",
-            "Accept":        "application/json; charset=UTF-8",
-            "X-IG-API-KEY":  self.api_key,
-            "Version":       "2",
+            "Content-Type": "application/json; charset=UTF-8",
+            "Accept":       "application/json; charset=UTF-8",
+            "X-IG-API-KEY": self.api_key,
+            "Version":      "2",
         }
         payload = {
             "identifier": self.username,
@@ -108,8 +108,8 @@ class IGClient:
             logger.error(f"IG auth failed {response.status_code}: {response.text}")
             response.raise_for_status()
 
-        self._cst            = response.headers.get("CST")
-        self._security_token = response.headers.get("X-SECURITY-TOKEN")
+        self._cst             = response.headers.get("CST")
+        self._security_token  = response.headers.get("X-SECURITY-TOKEN")
         self._session_expires = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
 
         if not self._cst or not self._security_token:
@@ -126,12 +126,12 @@ class IGClient:
             self._authenticate()
 
         return {
-            "Content-Type":      "application/json; charset=UTF-8",
-            "Accept":            "application/json; charset=UTF-8",
-            "X-IG-API-KEY":      self.api_key,
-            "CST":               self._cst,
-            "X-SECURITY-TOKEN":  self._security_token,
-            "Version":           version,
+            "Content-Type":     "application/json; charset=UTF-8",
+            "Accept":           "application/json; charset=UTF-8",
+            "X-IG-API-KEY":     self.api_key,
+            "CST":              self._cst,
+            "X-SECURITY-TOKEN": self._security_token,
+            "Version":          version,
         }
 
     def _get(self, endpoint: str, version: str = "1") -> dict:
@@ -157,21 +157,40 @@ class IGClient:
 
     # ── Account ───────────────────────────────────────────────────────────────
 
+    def _get_account_data(self) -> dict:
+        """
+        Fetch the matching account from /accounts list.
+        IG does not support /accounts/{id} — we fetch all and filter.
+        """
+        data = self._get("/accounts")
+        accounts = data.get("accounts", [])
+        for account in accounts:
+            if account.get("accountId") == self.account_id:
+                return account
+        # Fallback to first account if ID not found
+        if accounts:
+            logger.warning(
+                f"Account {self.account_id} not found — using first account: "
+                f"{accounts[0].get('accountId')}"
+            )
+            return accounts[0]
+        return {}
+
     def get_account_balance(self) -> float:
         """Returns current account balance."""
-        data = self._get(f"/accounts/{self.account_id}")
-        return float(data.get("balance", {}).get("balance", 0))
+        account = self._get_account_data()
+        return float(account.get("balance", {}).get("balance", 0))
 
     def get_account_summary(self) -> dict:
         """Returns full account summary — balance, P&L, margin, available funds."""
-        data = self._get(f"/accounts/{self.account_id}")
-        b = data.get("balance", {})
+        account = self._get_account_data()
+        b = account.get("balance", {})
         return {
             "balance":     float(b.get("balance", 0)),
             "deposit":     float(b.get("deposit", 0)),
             "profit_loss": float(b.get("profitLoss", 0)),
             "available":   float(b.get("available", 0)),
-            "currency":    data.get("currency", "GBP"),
+            "currency":    account.get("currency", "GBP"),
         }
 
     def get_open_positions_value(self) -> float:
@@ -273,23 +292,21 @@ class IGClient:
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
     ) -> Optional[dict]:
-        """
-        Open a new CFD position on IG.
-        """
+        """Open a new CFD position on IG."""
         epic = self._pair_to_epic(pair)
         if not epic:
             logger.error(f"No epic found for pair: {pair}")
             return None
 
         payload = {
-            "epic":             epic,
-            "direction":        direction.upper(),
-            "size":             str(size),
-            "orderType":        "MARKET",
-            "timeInForce":      "FILL_OR_KILL",
-            "guaranteedStop":   False,
-            "forceOpen":        True,
-            "currencyCode":     "GBP",
+            "epic":           epic,
+            "direction":      direction.upper(),
+            "size":           str(size),
+            "orderType":      "MARKET",
+            "timeInForce":    "FILL_OR_KILL",
+            "guaranteedStop": False,
+            "forceOpen":      True,
+            "currencyCode":   "GBP",
         }
 
         if stop_loss:
@@ -419,19 +436,19 @@ class IGClient:
                 pair     = self._epic_to_pair(epic)
 
                 result.append({
-                    "dealId":        position.get("dealId"),
-                    "pair":          pair,
-                    "epic":          epic,
-                    "instrument":    pair,
-                    "direction":     position.get("direction"),
-                    "dealSize":      position.get("dealSize"),
-                    "level":         position.get("level"),
-                    "currentUnits":  position.get("dealSize"),
-                    "unrealizedPL":  position.get("upl"),
-                    "stopLevel":     position.get("stopLevel"),
-                    "limitLevel":    position.get("limitLevel"),
-                    "openTime":      position.get("createdDateUTC"),
-                    "price":         position.get("level"),
+                    "dealId":       position.get("dealId"),
+                    "pair":         pair,
+                    "epic":         epic,
+                    "instrument":   pair,
+                    "direction":    position.get("direction"),
+                    "dealSize":     position.get("dealSize"),
+                    "level":        position.get("level"),
+                    "currentUnits": position.get("dealSize"),
+                    "unrealizedPL": position.get("upl"),
+                    "stopLevel":    position.get("stopLevel"),
+                    "limitLevel":   position.get("limitLevel"),
+                    "openTime":     position.get("createdDateUTC"),
+                    "price":        position.get("level"),
                 })
             return result
 
@@ -469,4 +486,4 @@ class IGClient:
             return True
         except Exception as e:
             logger.error(f"IG connection test failed: {e}")
-            return False
+            return Falses

@@ -18,6 +18,7 @@ Run with: python -m bot.scheduler
 
 import sys
 import asyncio
+import threading
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
@@ -35,7 +36,6 @@ from data.storage import TradeStorage
 from data.context_writer import ContextWriter
 from bot.instance import InstanceManager
 import httpx
-import threading
 
 # ── Setup logging ─────────────────────────────────────────────────────────────
 logger.remove()
@@ -69,14 +69,12 @@ def scan_markets():
     5. Execute trade if confidence >= minimum threshold
     6. Respect capital limit (never exceed max_capital)
     """
-    # Respect instance active state — inactive instances skip trading
     if not instance_manager.is_active():
         logger.debug(f"Instance {config.INSTANCE_ID} is not active — skipping scan")
         return
 
     logger.info("─── Market Scan Started ───")
 
-    # Check how much capital is already deployed
     balance = broker.get_account_balance()
     deployed_capital = broker.get_open_positions_value()
     available_capital = min(config.MAX_CAPITAL - deployed_capital, balance)
@@ -93,7 +91,6 @@ def scan_markets():
         return
 
     for pair in config.PAIRS:
-        # Don't open a second position on a pair we already hold
         if pair in open_pairs:
             logger.debug(f"Already holding {pair} — skipping")
             continue
@@ -104,47 +101,38 @@ def scan_markets():
             logger.error(f"Error evaluating {pair}: {e}")
 
     logger.info("─── Market Scan Complete ───")
-    # Update the context file so the Claude app always has fresh data
-    context_writer.write()
+
+    try:
+        context_writer.write()
+    except Exception as e:
+        logger.error(f"Failed to write context file: {e}")
 
 
 def _evaluate_pair(pair: str, available_capital: float):
     """
     Evaluate a single currency pair and trade if conditions are right.
-
-    Args:
-        pair: e.g. "EUR_USD"
-        available_capital: How much we're allowed to deploy
     """
-    # Step 1: Get current price data
     candles = broker.get_candles(pair, count=config.LOOKBACK_CANDLES, granularity=config.TIMEFRAME)
     if candles is None or len(candles) < 60:
         logger.warning(f"Insufficient candle data for {pair}")
         return
 
-    # Step 2: Calculate technical indicators
     ind = indicators.calculate(candles)
-
-    # Step 3: Get market context from MCP server
     mcp_context = _get_mcp_context(pair)
 
-    # Step 4: Calculate confidence score with full reasoning
     result = confidence.calculate_confidence(
         pair=pair,
         indicators=ind,
         mcp_context=mcp_context,
-        ml_prediction=None  # ML model added in Phase 2
+        ml_prediction=None
     )
 
     logger.info(f"{pair}: {result.direction} | Confidence: {result.score:.1f}% | Trade: {result.should_trade}")
 
-    # Step 5: Execute trade if confidence is high enough
     if not result.should_trade:
         return
 
-    # Calculate position size based on risk settings
-    stop_distance = ind.atr * config.STOP_LOSS_ATR_MULTIPLIER
-    units, stop_loss_price, take_profit_price = calculate_position_size(
+    size, stop_loss_price, take_profit_price = calculate_position_size(
         pair=pair,
         direction=result.direction,
         entry_price=ind.current_price,
@@ -152,31 +140,27 @@ def _evaluate_pair(pair: str, available_capital: float):
         available_capital=available_capital
     )
 
-    if units <= 0:
-        logger.warning(f"Calculated 0 units for {pair} — skipping trade")
+    if size <= 0:
+        logger.warning(f"Calculated 0 size for {pair} — skipping trade")
         return
 
-    # Step 6: Place the trade
+    # Place the trade — IGClient accepts: pair, direction, size, stop_loss, take_profit
     trade_result = broker.place_trade(
         pair=pair,
         direction=result.direction,
-        units=units,
-        stop_loss_price=stop_loss_price,
-        take_profit_price=take_profit_price,
-        confidence_score=result.score,
-        reasoning=result.reasoning
+        size=size,
+        stop_loss=stop_loss_price,
+        take_profit=take_profit_price,
     )
 
     if trade_result:
-        # Save trade to local storage
         storage.save_trade(trade_result)
 
-        # Send Telegram notification
         notifier.trade_opened(
             pair=pair,
             direction=result.direction,
             fill_price=trade_result["fill_price"],
-            units=units,
+            units=size,
             stop_loss=stop_loss_price,
             take_profit=take_profit_price,
             confidence_score=result.score,
@@ -188,15 +172,12 @@ def _evaluate_pair(pair: str, available_capital: float):
 def monitor_positions():
     """
     Monitor all open positions every 5 minutes.
-    Checks for stop-loss hits, take-profit hits, and unusual price movements.
-    Updates local trade storage with current P&L.
     """
     open_trades = broker.get_open_trades()
     if not open_trades:
         return
 
     for trade in open_trades:
-        trade_id = trade.get("id")
         unrealised_pl = float(trade.get("unrealizedPL", 0))
         logger.debug(f"Position {trade.get('instrument')} | Unrealised P&L: £{unrealised_pl:.2f}")
 
@@ -204,7 +185,6 @@ def monitor_positions():
 def eod_evaluation():
     """
     Runs at 23:45 UTC — evaluates all open positions for the 98% overnight rule.
-    Positions that qualify are held. All others are closed at 23:59.
     """
     logger.info("Running end-of-day position evaluation (98% rule check)")
     eod_manager.evaluate_overnight_holds()
@@ -213,7 +193,6 @@ def eod_evaluation():
 def force_close_all():
     """
     Runs at 23:59 UTC — closes every remaining open position.
-    This is non-negotiable unless a position was granted overnight hold status.
     """
     logger.info("Running end-of-day force close")
     close_results = eod_manager.force_close_non_held_positions()
@@ -232,20 +211,14 @@ def force_close_all():
 
 
 def send_daily_plan():
-    """
-    Sends tomorrow's trading plan via Telegram after the daily report.
-    Powered by Claude AI — gives a strategic view of the next trading day.
-    """
+    """Sends tomorrow's trading plan via Telegram."""
     logger.info("Generating tomorrow's trading plan")
     plan = plan_generator.generate()
     notifier._send(plan)
 
 
 def send_daily_report():
-    """
-    Runs at 00:05 UTC — compiles and sends the daily Telegram report.
-    Covers all trades from the previous day.
-    """
+    """Runs at 00:05 UTC — compiles and sends the daily Telegram report."""
     logger.info("Generating daily report")
 
     from datetime import timedelta
@@ -262,7 +235,6 @@ def send_daily_report():
     gross_profit = sum(t["pl"] for t in wins)
     gross_loss = abs(sum(t["pl"] for t in losses))
 
-    # Find best and worst performing pairs
     pair_pl = {}
     for t in trades:
         pair = t.get("pair", "")
@@ -345,110 +317,87 @@ def _get_mcp_context(pair: str) -> dict:
 def main():
     """Start the bot and schedule all jobs."""
 
-    # Validate config before starting
     config.validate()
-
-    # Start instance manager (heartbeat + failover monitoring)
     instance_manager.start()
-
-    # Send startup notification
     notifier.startup_message()
 
     scheduler = BlockingScheduler(timezone="UTC")
 
-    # Market scan — every 15 minutes
     scheduler.add_job(
-        scan_markets,
-        "interval",
+        scan_markets, "interval",
         minutes=config.SCAN_INTERVAL_MINUTES,
-        id="market_scan",
-        name="Market Scan"
+        id="market_scan", name="Market Scan"
     )
 
-    # Position monitor — every 5 minutes
     scheduler.add_job(
-        monitor_positions,
-        "interval",
+        monitor_positions, "interval",
         minutes=5,
-        id="position_monitor",
-        name="Position Monitor"
+        id="position_monitor", name="Position Monitor"
     )
 
-    # Parse EOD times
-    eod_eval_h, eod_eval_m = config.EOD_EVALUATION_TIME.split(":")
-    eod_close_h, eod_close_m = config.EOD_CLOSE_TIME.split(":")
-    report_h, report_m = config.DAILY_REPORT_TIME.split(":")
-    weekly_report_h, weekly_report_m = config.WEEKLY_REPORT_TIME.split(":")
+    eod_eval_h,   eod_eval_m   = config.EOD_EVALUATION_TIME.split(":")
+    eod_close_h,  eod_close_m  = config.EOD_CLOSE_TIME.split(":")
+    report_h,     report_m     = config.DAILY_REPORT_TIME.split(":")
+    weekly_report_h,   weekly_report_m   = config.WEEKLY_REPORT_TIME.split(":")
     weekly_analysis_h, weekly_analysis_m = config.WEEKLY_ANALYSIS_TIME.split(":")
 
-    # EOD evaluation (98% rule) — daily at 23:45
     scheduler.add_job(
         eod_evaluation,
         CronTrigger(hour=int(eod_eval_h), minute=int(eod_eval_m)),
-        id="eod_evaluation",
-        name="EOD Evaluation"
+        id="eod_evaluation", name="EOD Evaluation"
     )
 
-    # Force close all positions — daily at 23:59
     scheduler.add_job(
         force_close_all,
         CronTrigger(hour=int(eod_close_h), minute=int(eod_close_m)),
-        id="force_close",
-        name="Force Close All"
+        id="force_close", name="Force Close All"
     )
 
-    # Daily report — daily at 00:05
     scheduler.add_job(
         send_daily_report,
         CronTrigger(hour=int(report_h), minute=int(report_m)),
-        id="daily_report",
-        name="Daily Report"
+        id="daily_report", name="Daily Report"
     )
 
-    # Weekly analysis — Sunday at 19:00
     scheduler.add_job(
         send_weekly_report,
         CronTrigger(day_of_week="sun", hour=int(weekly_analysis_h), minute=int(weekly_analysis_m)),
-        id="weekly_analysis",
-        name="Weekly Analysis"
+        id="weekly_analysis", name="Weekly Analysis"
     )
 
-    # Weekly report — Sunday at 20:00
     scheduler.add_job(
         send_weekly_report,
         CronTrigger(day_of_week="sun", hour=int(weekly_report_h), minute=int(weekly_report_m)),
-        id="weekly_report",
-        name="Weekly Report"
+        id="weekly_report", name="Weekly Report"
     )
 
-    logger.info("📅 Scheduler started with the following jobs:")
-    for job in scheduler.get_jobs():
-        logger.info(f"   - {job.name}")
-
-    # Daily plan — after daily report (00:10 UTC)
     scheduler.add_job(
         send_daily_plan,
         CronTrigger(hour=0, minute=10),
-        id="daily_plan",
-        name="Tomorrow's Trading Plan"
+        id="daily_plan", name="Tomorrow's Trading Plan"
     )
 
     logger.info("📅 Scheduler started with the following jobs:")
     for job in scheduler.get_jobs():
         logger.info(f"   - {job.name}")
 
-    # Start Telegram chat handler in a separate thread
-    # This runs alongside the scheduler so you can ask questions any time
+    # Start Telegram chat handler in a separate thread with its own event loop
     def run_chat_handler():
-        logger.info("🤖 Starting Telegram chat interface...")
-        chat_app = chat_handler.build_app()
-        chat_app.run_polling(drop_pending_updates=True)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            logger.info("🤖 Starting Telegram chat interface...")
+            chat_app = chat_handler.build_app()
+            chat_app.run_polling(drop_pending_updates=True)
+        except Exception as e:
+            logger.error(f"Telegram chat handler error: {e}")
+        finally:
+            loop.close()
 
     chat_thread = threading.Thread(target=run_chat_handler, daemon=True)
     chat_thread.start()
     logger.info("✅ Telegram chat interface started")
 
-    # Run an immediate scan on startup so you know it's working
     logger.info("Running initial market scan...")
     scan_markets()
 

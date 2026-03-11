@@ -43,7 +43,6 @@ IG_EPICS = {
 }
 
 # Dealing currency for each pair's IG mini CFD
-# This is the currency IG uses to denominate P&L for each instrument
 IG_DEAL_CURRENCY = {
     "EUR_USD": "USD",
     "GBP_USD": "USD",
@@ -140,6 +139,7 @@ class IGClient:
             "X-IG-API-KEY":     self.api_key,
             "CST":              self._cst,
             "X-SECURITY-TOKEN": self._security_token,
+            "IG-ACCOUNT-ID":    self.account_id,
             "Version":          version,
         }
 

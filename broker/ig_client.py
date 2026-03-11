@@ -283,18 +283,15 @@ class IGClient:
             logger.error(f"No epic found for pair: {pair}")
             return None
 
-        # IG mini contracts require minimum size of 1, rounded to 1 decimal place
+        # IG mini contracts: minimum size 1, rounded to 1 decimal place
         size = max(1.0, round(float(size), 1))
-
-        logger.info(f"Submitting order: {pair} {direction} size={size} epic={epic} SL={stop_loss} TP={take_profit}")
 
         payload = {
             "epic":           epic,
-            "expiry":         "-",
             "direction":      direction.upper(),
             "size":           size,
             "orderType":      "MARKET",
-            "timeInForce":    "FILL_OR_KILL",
+            "timeInForce":    "EXECUTE_AND_ELIMINATE",
             "guaranteedStop": False,
             "forceOpen":      True,
             "currencyCode":   "GBP",
@@ -305,6 +302,8 @@ class IGClient:
         #     payload["stopLevel"] = round(stop_loss, 5)
         # if take_profit:
         #     payload["limitLevel"] = round(take_profit, 5)
+
+        logger.info(f"Submitting order: {pair} {direction} size={size} | payload={payload}")
 
         try:
             response = self._post("/positions/otc", payload, version="2")
@@ -356,7 +355,7 @@ class IGClient:
             "direction":   close_direction,
             "size":        max(1.0, round(float(size), 1)),
             "orderType":   "MARKET",
-            "timeInForce": "FILL_OR_KILL",
+            "timeInForce": "EXECUTE_AND_ELIMINATE",
         }
 
         try:

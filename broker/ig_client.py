@@ -29,7 +29,6 @@ import time
 from bot import config
 
 # ── IG Epic Mapping ───────────────────────────────────────────────────────────
-# Maps standard pair names to IG's internal epic identifiers (mini CFD contracts)
 IG_EPICS = {
     "EUR_USD": "CS.D.EURUSD.MINI.IP",
     "GBP_USD": "CS.D.GBPUSD.MINI.IP",
@@ -60,10 +59,6 @@ class IGClient:
     """
     Wrapper around the IG Group REST API.
 
-    Provides the same interface as the original OandaClient so the
-    rest of the bot works without any changes. Only this file knows
-    about IG — everything else uses standard pair names and methods.
-
     Usage:
         client = IGClient()
         price = client.get_price("EUR_USD")
@@ -77,7 +72,6 @@ class IGClient:
         self.password   = config.IG_PASSWORD
         self.account_id = config.IG_ACCOUNT_ID
 
-        # Session tokens — refreshed automatically every 5.5 hours
         self._cst = None
         self._security_token = None
         self._session_expires = None
@@ -158,16 +152,12 @@ class IGClient:
     # ── Account ───────────────────────────────────────────────────────────────
 
     def _get_account_data(self) -> dict:
-        """
-        Fetch the matching account from /accounts list.
-        IG does not support /accounts/{id} — we fetch all and filter.
-        """
+        """Fetch the matching account from /accounts list."""
         data = self._get("/accounts")
         accounts = data.get("accounts", [])
         for account in accounts:
             if account.get("accountId") == self.account_id:
                 return account
-        # Fallback to first account if ID not found
         if accounts:
             logger.warning(
                 f"Account {self.account_id} not found — using first account: "
@@ -238,12 +228,7 @@ class IGClient:
         count: int = 100,
         granularity: str = "H1"
     ) -> Optional[pd.DataFrame]:
-        """
-        Fetch OHLCV candlestick data for a pair.
-
-        Returns a DataFrame with columns: open, high, low, close, volume
-        with a UTC datetime index. Returns None if data unavailable.
-        """
+        """Fetch OHLCV candlestick data for a pair."""
         epic = self._pair_to_epic(pair)
         if not epic:
             return None
@@ -300,8 +285,9 @@ class IGClient:
 
         payload = {
             "epic":           epic,
+            "expiry":         "-",
             "direction":      direction.upper(),
-            "size":           str(size),
+            "size":           size,
             "orderType":      "MARKET",
             "timeInForce":    "FILL_OR_KILL",
             "guaranteedStop": False,
@@ -359,7 +345,7 @@ class IGClient:
         payload = {
             "dealId":      deal_id,
             "direction":   close_direction,
-            "size":        str(size),
+            "size":        size,
             "orderType":   "MARKET",
             "timeInForce": "FILL_OR_KILL",
         }
@@ -425,7 +411,8 @@ class IGClient:
     def get_open_trades(self) -> list:
         """Returns all currently open CFD positions."""
         try:
-            data = self._get("/positions/otc")
+            # Version 2 is required for the positions endpoint
+            data = self._get("/positions", version="2")
             positions = data.get("positions", [])
 
             result = []
@@ -486,4 +473,4 @@ class IGClient:
             return True
         except Exception as e:
             logger.error(f"IG connection test failed: {e}")
-            return Falses
+            return False

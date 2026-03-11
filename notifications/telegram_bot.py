@@ -286,12 +286,12 @@ class TelegramNotifier:
 
     def startup_message(self):
         """Sent when the bot starts up — confirms it's running."""
-        env = config.OANDA_ENVIRONMENT.upper()
+        env = config.IG_ENVIRONMENT.upper()
         message = (
             f"*🚀 BOT STARTED*\n"
             f"─────────────────────\n"
             f"AI Trader Bot is now running.\n\n"
-            f"*Account:* {env} {'(Demo — no real money)' if env == 'PRACTICE' else '⚠️ LIVE ACCOUNT'}\n"
+            f"*Account:* {env} {'(Demo — no real money)' if env == 'DEMO' else '⚠️ LIVE ACCOUNT'}\n"
             f"*Pairs:* {', '.join([p.replace('_', '/') for p in config.PAIRS])}\n"
             f"*Max Capital:* £{config.MAX_CAPITAL}\n"
             f"*Min Confidence:* {config.MIN_CONFIDENCE_SCORE}%\n"

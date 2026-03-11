@@ -134,13 +134,13 @@ class IGClient:
         r.raise_for_status()
         return r.json()
 
-def _post(self, endpoint: str, payload: dict, version: str = "1") -> dict:
-    url = f"{self.base_url}{endpoint}"
-    r = httpx.post(url, json=payload, headers=self._headers(version), timeout=15)
-    if r.status_code != 200:
-        logger.error(f"POST {endpoint} failed {r.status_code}: {r.text}")
-    r.raise_for_status()
-    return r.json()
+    def _post(self, endpoint: str, payload: dict, version: str = "1") -> dict:
+        url = f"{self.base_url}{endpoint}"
+        r = httpx.post(url, json=payload, headers=self._headers(version), timeout=15)
+        if r.status_code != 200:
+            logger.error(f"POST {endpoint} failed {r.status_code}: {r.text}")
+        r.raise_for_status()
+        return r.json()
 
     def _delete(self, endpoint: str, payload: dict = None, version: str = "1") -> dict:
         """IG uses POST with _method=DELETE override for some endpoints."""

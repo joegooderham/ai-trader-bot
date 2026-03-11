@@ -283,6 +283,11 @@ class IGClient:
             logger.error(f"No epic found for pair: {pair}")
             return None
 
+        # IG mini contracts require minimum size of 1, rounded to 1 decimal place
+        size = max(1.0, round(float(size), 1))
+
+        logger.info(f"Submitting order: {pair} {direction} size={size} epic={epic} SL={stop_loss} TP={take_profit}")
+
         payload = {
             "epic":           epic,
             "expiry":         "-",
@@ -296,9 +301,9 @@ class IGClient:
         }
 
         if stop_loss:
-            payload["stopLevel"] = stop_loss
+            payload["stopLevel"] = round(stop_loss, 5)
         if take_profit:
-            payload["limitLevel"] = take_profit
+            payload["limitLevel"] = round(take_profit, 5)
 
         try:
             response = self._post("/positions/otc", payload, version="2")
@@ -331,7 +336,10 @@ class IGClient:
                 }
             else:
                 reason = confirmation.get("reason", "Unknown reason")
-                logger.error(f"Trade rejected: {pair} {direction} — {reason} | Full response: {confirmation}")
+                logger.error(
+                    f"Trade rejected: {pair} {direction} — {reason} "
+                    f"| Full response: {confirmation}"
+                )
                 return None
 
         except Exception as e:
@@ -345,7 +353,7 @@ class IGClient:
         payload = {
             "dealId":      deal_id,
             "direction":   close_direction,
-            "size":        size,
+            "size":        max(1.0, round(float(size), 1)),
             "orderType":   "MARKET",
             "timeInForce": "FILL_OR_KILL",
         }
@@ -411,7 +419,6 @@ class IGClient:
     def get_open_trades(self) -> list:
         """Returns all currently open CFD positions."""
         try:
-            # Version 2 is required for the positions endpoint
             data = self._get("/positions", version="2")
             positions = data.get("positions", [])
 

@@ -297,7 +297,6 @@ class IGClient:
             "timeInForce":    "EXECUTE_AND_ELIMINATE",
             "guaranteedStop": False,
             "forceOpen":      True,
-            "currencyCode":   "GBP",
         }
 
         # SL/TP temporarily disabled for bare order test

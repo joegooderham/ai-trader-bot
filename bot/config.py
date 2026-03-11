@@ -1,7 +1,7 @@
 """
 bot/config.py — Configuration Loader
 ─────────────────────────────────────
-Loads settings from config.yaml and environment variables (.env).
+Loads settings from config.yaml and environment variables.
 All other modules import from here so there's one single source of truth
 for every setting in the application.
 """
@@ -29,16 +29,25 @@ def _load_yaml() -> dict:
 _cfg = _load_yaml()
 
 
-# ── OANDA Broker ──────────────────────────────────────────────────────────────
+# ── IG Group Broker ───────────────────────────────────────────────────────────
 
-OANDA_API_TOKEN = os.getenv("OANDA_API_TOKEN")
-OANDA_ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID")
-OANDA_ENVIRONMENT = os.getenv("OANDA_ENVIRONMENT", "practice")  # Default to demo
+IG_API_KEY     = os.getenv("IG_API_KEY", "")
+IG_USERNAME    = os.getenv("IG_USERNAME", "")
+IG_PASSWORD    = os.getenv("IG_PASSWORD", "")
+IG_ACCOUNT_ID  = os.getenv("IG_ACCOUNT_ID", "")
+IG_ENVIRONMENT = os.getenv("IG_ENVIRONMENT", "demo")
+
+# Base URL switches automatically based on environment
+IG_BASE_URL = (
+    "https://demo-api.ig.com/gateway/deal"
+    if IG_ENVIRONMENT == "demo"
+    else "https://api.ig.com/gateway/deal"
+)
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 
 # ── Claude AI ─────────────────────────────────────────────────────────────────
 
@@ -46,18 +55,18 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # ── Capital & Risk ────────────────────────────────────────────────────────────
 
-MAX_CAPITAL = float(os.getenv("MAX_CAPITAL", 500))
-MIN_CONFIDENCE_SCORE = float(os.getenv("MIN_CONFIDENCE_SCORE", 60))
-HOLD_OVERNIGHT_THRESHOLD = float(os.getenv("HOLD_OVERNIGHT_THRESHOLD", 98))
+MAX_CAPITAL               = float(os.getenv("MAX_CAPITAL", 500))
+MIN_CONFIDENCE_SCORE      = float(os.getenv("MIN_CONFIDENCE_SCORE", 60))
+HOLD_OVERNIGHT_THRESHOLD  = float(os.getenv("HOLD_OVERNIGHT_THRESHOLD", 98))
 
 # ── Trading Parameters (from config.yaml) ────────────────────────────────────
 
-PAIRS = _cfg["trading"]["pairs"]
+PAIRS                = _cfg["trading"]["pairs"]
 SCAN_INTERVAL_MINUTES = _cfg["trading"]["scan_interval_minutes"]
-MAX_OPEN_POSITIONS = _cfg["trading"]["max_open_positions"]
-PER_TRADE_RISK_PCT = _cfg["trading"]["per_trade_risk_pct"]
-TIMEFRAME = _cfg["trading"]["timeframe"]
-LOOKBACK_CANDLES = _cfg["trading"]["lookback_candles"]
+MAX_OPEN_POSITIONS   = _cfg["trading"]["max_open_positions"]
+PER_TRADE_RISK_PCT   = _cfg["trading"]["per_trade_risk_pct"]
+TIMEFRAME            = _cfg["trading"]["timeframe"]
+LOOKBACK_CANDLES     = _cfg["trading"]["lookback_candles"]
 
 # ── Confidence Score Weights ──────────────────────────────────────────────────
 
@@ -65,24 +74,24 @@ CONFIDENCE_WEIGHTS = _cfg["confidence"]["weights"]
 
 # ── Risk Management ───────────────────────────────────────────────────────────
 
-STOP_LOSS_ATR_MULTIPLIER = _cfg["risk"]["stop_loss_atr_multiplier"]
-TAKE_PROFIT_RATIO = _cfg["risk"]["take_profit_ratio"]
-DAILY_LOSS_CIRCUIT_BREAKER_PCT = _cfg["risk"]["daily_loss_circuit_breaker_pct"]
-OVERNIGHT_PROFIT_PROTECTION_PCT = _cfg["risk"]["overnight_profit_protection_pct"]
+STOP_LOSS_ATR_MULTIPLIER         = _cfg["risk"]["stop_loss_atr_multiplier"]
+TAKE_PROFIT_RATIO                = _cfg["risk"]["take_profit_ratio"]
+DAILY_LOSS_CIRCUIT_BREAKER_PCT   = _cfg["risk"]["daily_loss_circuit_breaker_pct"]
+OVERNIGHT_PROFIT_PROTECTION_PCT  = _cfg["risk"]["overnight_profit_protection_pct"]
 
 # ── Schedule ──────────────────────────────────────────────────────────────────
 
-EOD_CLOSE_TIME = _cfg["schedule"]["eod_close_time"]
-EOD_EVALUATION_TIME = _cfg["schedule"]["eod_evaluation_time"]
-DAILY_REPORT_TIME = _cfg["schedule"]["daily_report_time"]
-WEEKLY_REPORT_DAY = _cfg["schedule"]["weekly_report_day"]
-WEEKLY_REPORT_TIME = _cfg["schedule"]["weekly_report_time"]
-WEEKLY_ANALYSIS_DAY = _cfg["schedule"]["weekly_analysis_day"]
+EOD_CLOSE_TIME       = _cfg["schedule"]["eod_close_time"]
+EOD_EVALUATION_TIME  = _cfg["schedule"]["eod_evaluation_time"]
+DAILY_REPORT_TIME    = _cfg["schedule"]["daily_report_time"]
+WEEKLY_REPORT_DAY    = _cfg["schedule"]["weekly_report_day"]
+WEEKLY_REPORT_TIME   = _cfg["schedule"]["weekly_report_time"]
+WEEKLY_ANALYSIS_DAY  = _cfg["schedule"]["weekly_analysis_day"]
 WEEKLY_ANALYSIS_TIME = _cfg["schedule"]["weekly_analysis_time"]
 
 # ── MCP Analysis ─────────────────────────────────────────────────────────────
 
-MCP_CONFIG = _cfg["mcp"]
+MCP_CONFIG   = _cfg["mcp"]
 CLAUDE_MODEL = _cfg["mcp"]["claude_model"]
 
 # ── Data Storage ─────────────────────────────────────────────────────────────
@@ -94,38 +103,20 @@ INITIAL_HISTORY_DAYS = _cfg["data"]["initial_history_days"]
 
 # ── Notifications ─────────────────────────────────────────────────────────────
 
-TIMEZONE = _cfg["notifications"]["timezone"]
+TIMEZONE                  = _cfg["notifications"]["timezone"]
 SHOW_CONFIDENCE_BREAKDOWN = _cfg["notifications"]["show_confidence_breakdown"]
-SHOW_AI_REASONING = _cfg["notifications"]["show_ai_reasoning"]
-
-
-
-
-# ── IG Group Broker Settings ──────────────────────────────────────────────────
-IG_API_KEY    = os.getenv("IG_API_KEY", "")
-IG_USERNAME   = os.getenv("IG_USERNAME", "")
-IG_PASSWORD   = os.getenv("IG_PASSWORD", "")
-IG_ACCOUNT_ID = os.getenv("IG_ACCOUNT_ID", "")
-IG_ENVIRONMENT = os.getenv("IG_ENVIRONMENT", "demo")
-
-# Base URL switches automatically based on environment
-IG_BASE_URL = (
-    "https://demo-api.ig.com/gateway/deal"
-    if IG_ENVIRONMENT == "demo"
-    else "https://api.ig.com/gateway/deal"
-)
+SHOW_AI_REASONING         = _cfg["notifications"]["show_ai_reasoning"]
 
 # ── Instance / Multi-Bot Settings ────────────────────────────────────────────
-# These come from config.yaml instance section
-# Defaults mean single-instance mode — no changes needed for now
 
 _instance_cfg = _cfg.get("instance", {})
 
-INSTANCE_ID = _instance_cfg.get("instance_id", "primary")
-INSTANCE_ACTIVE = _instance_cfg.get("active", True)
-COORDINATION_MODE = _instance_cfg.get("coordination_mode", "independent")
-FAILOVER_TIMEOUT_SECONDS = _instance_cfg.get("failover_timeout_seconds", 120)
-HEARTBEAT_INTERVAL_SECONDS = _instance_cfg.get("heartbeat_interval_seconds", 30)
+INSTANCE_ID                 = _instance_cfg.get("instance_id", "primary")
+INSTANCE_ACTIVE             = _instance_cfg.get("active", True)
+COORDINATION_MODE           = _instance_cfg.get("coordination_mode", "independent")
+FAILOVER_TIMEOUT_SECONDS    = _instance_cfg.get("failover_timeout_seconds", 120)
+HEARTBEAT_INTERVAL_SECONDS  = _instance_cfg.get("heartbeat_interval_seconds", 30)
+
 
 def validate():
     """
@@ -133,22 +124,25 @@ def validate():
     Called at startup — the bot won't run if anything is missing.
     """
     required = {
-        "OANDA_API_TOKEN": OANDA_API_TOKEN,
-        "OANDA_ACCOUNT_ID": OANDA_ACCOUNT_ID,
-        "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
-        "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
-        "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY,
+        "IG_API_KEY":          IG_API_KEY,
+        "IG_USERNAME":         IG_USERNAME,
+        "IG_PASSWORD":         IG_PASSWORD,
+        "IG_ACCOUNT_ID":       IG_ACCOUNT_ID,
+        "TELEGRAM_BOT_TOKEN":  TELEGRAM_BOT_TOKEN,
+        "TELEGRAM_CHAT_ID":    TELEGRAM_CHAT_ID,
+        "ANTHROPIC_API_KEY":   ANTHROPIC_API_KEY,
     }
 
     missing = [k for k, v in required.items() if not v]
 
     if missing:
         logger.error(f"Missing required environment variables: {missing}")
-        logger.error("Please check your .env file against .env.example")
+        logger.error("Please set these in your GitHub Secrets")
         raise EnvironmentError(f"Missing config: {missing}")
 
     logger.info("✅ All configuration loaded successfully")
-    logger.info(f"   Environment: {OANDA_ENVIRONMENT.upper()}")
+    logger.info(f"   Environment: {IG_ENVIRONMENT.upper()}")
+    logger.info(f"   Account: {IG_ACCOUNT_ID}")
     logger.info(f"   Max capital: £{MAX_CAPITAL}")
     logger.info(f"   Pairs to trade: {', '.join(PAIRS)}")
     logger.info(f"   Min confidence to trade: {MIN_CONFIDENCE_SCORE}%")

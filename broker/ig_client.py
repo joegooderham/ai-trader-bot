@@ -92,9 +92,16 @@ class IGClient:
             "Version":      "2",
         }
         payload = {
-            "identifier": self.username,
-            "password":   self.password,
-        }
+        "epic":           epic,
+        "expiry":         "-",
+        "direction":      direction.upper(),
+        "size":           size,
+        "orderType":      "MARKET",
+        "timeInForce":    "EXECUTE_AND_ELIMINATE",
+        "guaranteedStop": False,
+        "forceOpen":      True,
+        "currencyCode":   "GBP",
+}
 
         response = httpx.post(url, json=payload, headers=headers, timeout=15)
 

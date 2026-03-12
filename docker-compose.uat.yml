@@ -37,6 +37,7 @@ services:
       - ./data_store_uat:/app/data_store
       - ./logs-uat:/app/logs
       - ./config:/app/config
+      - ./.git:/app/.git:ro
     depends_on:
       - mcp-server
     networks:

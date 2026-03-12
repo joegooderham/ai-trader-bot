@@ -23,6 +23,7 @@ services:
       - ./data_store:/app/data_store
       - ./logs:/app/logs
       - ./config:/app/config
+      - ./.git:/app/.git:ro
     depends_on:
       - mcp-server
     networks:

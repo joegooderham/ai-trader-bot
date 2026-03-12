@@ -22,6 +22,8 @@ How it works:
 
 import asyncio
 import json
+import sqlite3
+import subprocess
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 from telegram import Update, Bot
@@ -31,7 +33,7 @@ import anthropic
 import httpx
 
 from bot import config
-from data.storage import TradeStorage
+from data.storage import TradeStorage, DB_PATH
 from broker.ig_client import IGClient
 
 
@@ -67,6 +69,8 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("plan", self.cmd_tomorrow_plan))
         self.app.add_handler(CommandHandler("stats", self.cmd_stats))
         self.app.add_handler(CommandHandler("fallbacktest", self.cmd_fallback_test))
+        self.app.add_handler(CommandHandler("query", self.cmd_query))
+        self.app.add_handler(CommandHandler("devops", self.cmd_devops))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
 
         return self.app
@@ -84,7 +88,9 @@ class TelegramChatHandler:
             "*/health* — System health status\n"
             "*/plan* — Tomorrow's trading plan\n"
             "*/stats* — All-time performance stats\n"
-            "*/fallbacktest* — Test yfinance backup data source\n\n"
+            "*/fallbacktest* — Test yfinance backup data source\n"
+            "*/query* `<question>` — Query trade database in plain English\n"
+            "*/devops* — Today's code changes (git log)\n\n"
             "*Or just ask naturally, for example:*\n"
             "_\"How did EUR/USD perform this week?\"_\n"
             "_\"Why did the bot make that last trade?\"_\n"
@@ -153,6 +159,165 @@ class TelegramChatHandler:
                 "⚠️ Could not reach MCP server to test yfinance fallback.\n"
                 f"Error: {str(e)[:200]}"
             )
+
+    async def cmd_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Query the SQLite trade database using natural language.
+        Claude translates the question to SQL, executes read-only, returns results."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        question = update.message.text.replace("/query", "", 1).strip()
+        if not question:
+            await update.message.reply_text(
+                "*Usage:* `/query <your question>`\n\n"
+                "*Examples:*\n"
+                "- `/query how many trades this week`\n"
+                "- `/query average P&L on EUR/USD`\n"
+                "- `/query best performing pair last 30 days`\n"
+                "- `/query show all winning trades above £5`\n"
+                "- `/query how many candles stored per pair`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            # Ask Claude to generate SQL from the question
+            schema_info = (
+                "Tables:\n"
+                "- trades: id, trade_id, pair, direction, size, fill_price, close_price, "
+                "stop_loss, take_profit, pl, confidence_score, reasoning, status, "
+                "opened_at (ISO text), closed_at, close_reason, deal_id, deal_reference, breakdown, created_at\n"
+                "- overnight_holds: id, trade_id, pair, score, reasoning, date, created_at\n"
+                "- candles: id, pair, timeframe, timestamp, open, high, low, close, volume, source\n"
+                "\nPair format: EUR_USD, GBP_USD, USD_JPY, AUD_USD, USD_CAD\n"
+                "Dates are ISO format text (e.g. '2026-03-12T17:00:00')\n"
+            )
+
+            loop = asyncio.get_event_loop()
+            sql_response = await loop.run_in_executor(
+                None,
+                lambda: self.claude.messages.create(
+                    model=config.CLAUDE_MODEL,
+                    max_tokens=500,
+                    system=(
+                        "You are a SQL query generator. Given a natural language question about "
+                        "trading data, generate a single READ-ONLY SQLite query. "
+                        "Return ONLY the SQL query, nothing else. No markdown, no explanation. "
+                        "Never use DELETE, UPDATE, INSERT, DROP, ALTER, or CREATE. "
+                        "Only SELECT queries are allowed.\n\n" + schema_info
+                    ),
+                    messages=[{"role": "user", "content": question}]
+                )
+            )
+
+            sql = sql_response.content[0].text.strip()
+
+            # Safety: only allow SELECT queries
+            sql_upper = sql.upper().strip()
+            if not sql_upper.startswith("SELECT"):
+                await update.message.reply_text("⚠️ Only SELECT queries are allowed.")
+                return
+
+            # Execute the query read-only
+            conn = sqlite3.connect(str(DB_PATH), timeout=10)
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute(sql).fetchall()
+            finally:
+                conn.close()
+
+            if not rows:
+                await update.message.reply_text(
+                    f"*Query:* `{sql[:200]}`\n\nNo results found.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                return
+
+            # Format results — ask Claude to summarise
+            results_text = json.dumps([dict(r) for r in rows[:50]], default=str, indent=2)
+
+            summary_response = await loop.run_in_executor(
+                None,
+                lambda: self.claude.messages.create(
+                    model=config.CLAUDE_MODEL,
+                    max_tokens=800,
+                    system=(
+                        "Format these SQL query results for a Telegram message. "
+                        "Be concise. Use *bold* for key numbers. Use emojis sparingly. "
+                        "Don't use markdown headers (##). If it's a table, use aligned text. "
+                        "Max 800 words."
+                    ),
+                    messages=[{
+                        "role": "user",
+                        "content": f"Question: {question}\nSQL: {sql}\nResults ({len(rows)} rows):\n{results_text}"
+                    }]
+                )
+            )
+
+            message = (
+                f"*🔍 Database Query*\n"
+                f"─────────────────────\n"
+                f"*Q:* _{question}_\n"
+                f"*SQL:* `{sql[:150]}`\n"
+                f"*Rows:* {len(rows)}\n\n"
+                f"{summary_response.content[0].text}"
+            )
+
+            if len(message) > 4096:
+                message = message[:4090] + "..."
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Query command failed: {e}")
+            await update.message.reply_text(
+                f"⚠️ Query failed: {str(e)[:300]}"
+            )
+
+    async def cmd_devops(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show today's git commits — what code changes were made."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            result = subprocess.run(
+                ["git", "log", f"--since={today}", "--format=%h %s (%ar)", "--no-merges"],
+                capture_output=True, text=True, timeout=10,
+                cwd="/app"
+            )
+
+            commits = result.stdout.strip()
+            if not commits:
+                await update.message.reply_text("No code changes today.")
+                return
+
+            commit_lines = commits.split("\n")
+            message = (
+                f"*🛠 Dev Log — {today}*\n"
+                f"─────────────────────\n"
+                f"*{len(commit_lines)} commits today:*\n\n"
+            )
+
+            for line in commit_lines[:20]:
+                message += f"• `{line}`\n"
+
+            if len(commit_lines) > 20:
+                message += f"\n_...and {len(commit_lines) - 20} more_"
+
+            message += f"\n\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Devops command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch git log: {str(e)[:200]}")
 
     # ── Main Question Handler ─────────────────────────────────────────────────
 

@@ -312,6 +312,16 @@ class TelegramNotifier:
         )
         self._send(message)
 
+    def dev_activity(self, summary: str):
+        """Sent after code changes are deployed — keeps Joseph informed."""
+        message = (
+            f"*🛠 DEV ACTIVITY UPDATE*\n"
+            f"─────────────────────\n"
+            f"{summary}\n"
+            f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+        )
+        self._send(message)
+
     def startup_message(self):
         """Sent when the bot starts up — confirms it's running."""
         env = config.IG_ENVIRONMENT.upper()

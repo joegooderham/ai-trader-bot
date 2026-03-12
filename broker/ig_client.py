@@ -159,6 +159,15 @@ class IGClient:
         # to avoid circular imports (scheduler creates both IGClient and TelegramNotifier)
         self._notifier = None
 
+        # SQLite candle storage — persists candle data across restarts so we
+        # never re-fetch historical data we already have
+        self._storage = None
+        try:
+            from data.storage import TradeStorage
+            self._storage = TradeStorage()
+        except Exception as e:
+            logger.warning(f"Could not init candle storage: {e}")
+
         self._authenticate()
         env = "DEMO" if "demo" in self.base_url else "LIVE ⚠️"
         logger.info(f"Connected to IG Group ({env} account: {self.account_id})")
@@ -384,7 +393,18 @@ class IGClient:
                 logger.warning(f"Cache top-up failed for {pair} — returning stale cache")
                 return cached["df"]
 
-        # No cache yet — do the full fetch, falling back to yfinance if IG fails
+        # No cache yet — check SQLite for stored candle history before hitting APIs
+        if self._storage:
+            stored_df = self._storage.get_candles(pair, granularity, count)
+            if stored_df is not None and len(stored_df) >= count:
+                logger.debug(f"SQLite hit for {pair} {granularity} — {len(stored_df)} candles from disk")
+                self._candle_cache[cache_key] = {
+                    "df":               stored_df,
+                    "last_candle_time": stored_df.index[-1].to_pydatetime(),
+                }
+                return stored_df
+
+        # SQLite didn't have enough data — do the full fetch
         logger.debug(f"Cache miss for {pair} {granularity} — fetching {count} candles")
         df = self._fetch_candles_with_fallback(pair, count=count, granularity=granularity)
         if df is not None and not df.empty:
@@ -392,6 +412,9 @@ class IGClient:
                 "df":               df,
                 "last_candle_time": df.index[-1].to_pydatetime(),
             }
+            # Persist to SQLite so we never need to re-fetch this data
+            if self._storage:
+                self._storage.save_candles(pair, granularity, df, source="ig")
         return df
 
     def _fetch_candles_with_fallback(
@@ -408,6 +431,9 @@ class IGClient:
         """
         df = self._fetch_candles_from_ig(pair, count=count, granularity=granularity)
         if df is not None and not df.empty:
+            # Persist IG candles to SQLite for historical record
+            if self._storage:
+                self._storage.save_candles(pair, granularity, df, source="ig")
             return df
 
         # IG failed — try yfinance as fallback
@@ -423,6 +449,10 @@ class IGClient:
                 )
             except Exception as e:
                 logger.error(f"Failed to send fallback Telegram alert: {e}")
+
+        # Persist yfinance candles to SQLite too
+        if fallback_df is not None and not fallback_df.empty and self._storage:
+            self._storage.save_candles(pair, granularity, fallback_df, source="yfinance")
 
         return fallback_df
 

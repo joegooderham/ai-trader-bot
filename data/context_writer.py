@@ -122,10 +122,10 @@ Use it to ask questions and get deep analysis about trading activity."""
             lines.append("- No trades placed today yet")
             return "\n".join(lines)
 
-        wins = [t for t in trades if t.get("pl", 0) > 0]
-        losses = [t for t in trades if t.get("pl", 0) <= 0 and "pl" in t]
-        open_today = [t for t in trades if "pl" not in t]
-        net_pl = sum(t.get("pl", 0) for t in trades)
+        wins = [t for t in trades if (t.get("pl") or 0) > 0]
+        losses = [t for t in trades if t.get("pl") is not None and (t.get("pl") or 0) <= 0]
+        open_today = [t for t in trades if t.get("pl") is None]
+        net_pl = sum(t.get("pl") or 0 for t in trades)
         win_rate = round(len(wins) / len(trades) * 100, 1) if trades else 0
 
         lines.append(f"- **Total Trades:** {len(trades)}")
@@ -136,7 +136,7 @@ Use it to ask questions and get deep analysis about trading activity."""
         pair_pl = {}
         for t in trades:
             p = t.get("pair", "Unknown")
-            pair_pl[p] = round(pair_pl.get(p, 0) + t.get("pl", 0), 2)
+            pair_pl[p] = round(pair_pl.get(p, 0) + (t.get("pl") or 0), 2)
 
         if pair_pl:
             lines.append("\n**P&L by Pair Today:**")
@@ -169,11 +169,11 @@ Use it to ask questions and get deep analysis about trading activity."""
             lines.append("- No trades this week yet")
             return "\n".join(lines)
 
-        wins = [t for t in trades if t.get("pl", 0) > 0]
-        net_pl = sum(t.get("pl", 0) for t in trades)
+        wins = [t for t in trades if (t.get("pl") or 0) > 0]
+        net_pl = sum(t.get("pl") or 0 for t in trades)
         win_rate = round(len(wins) / len(trades) * 100, 1) if trades else 0
-        gross_profit = sum(t["pl"] for t in wins)
-        gross_loss = abs(sum(t.get("pl", 0) for t in trades if t.get("pl", 0) < 0))
+        gross_profit = sum(t.get("pl") or 0 for t in wins)
+        gross_loss = abs(sum(t.get("pl") or 0 for t in trades if (t.get("pl") or 0) < 0))
         profit_factor = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 999
 
         lines.append(f"- **Total Trades:** {len(trades)}")
@@ -188,9 +188,9 @@ Use it to ask questions and get deep analysis about trading activity."""
         pair_wins = {}
         for t in trades:
             p = t.get("pair", "Unknown")
-            pair_pl[p] = round(pair_pl.get(p, 0) + t.get("pl", 0), 2)
+            pair_pl[p] = round(pair_pl.get(p, 0) + (t.get("pl") or 0), 2)
             pair_trades[p] = pair_trades.get(p, 0) + 1
-            if t.get("pl", 0) > 0:
+            if (t.get("pl") or 0) > 0:
                 pair_wins[p] = pair_wins.get(p, 0) + 1
 
         lines.append("\n**Performance by Pair This Week:**")

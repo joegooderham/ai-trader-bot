@@ -248,9 +248,9 @@ class TelegramChatHandler:
             "date":          today,
             "trades":        today_trades,
             "total_trades":  len(today_trades),
-            "wins":          len([t for t in today_trades if t.get("pl", 0) > 0]),
-            "losses":        len([t for t in today_trades if t.get("pl", 0) <= 0 and "pl" in t]),
-            "net_pl":        round(sum(t.get("pl", 0) for t in today_trades), 2),
+            "wins":          len([t for t in today_trades if (t.get("pl") or 0) > 0]),
+            "losses":        len([t for t in today_trades if t.get("pl") is not None and (t.get("pl") or 0) <= 0]),
+            "net_pl":        round(sum(t.get("pl") or 0 for t in today_trades), 2),
             "pairs_traded":  list(set(t.get("pair", "") for t in today_trades)),
         }
 
@@ -259,13 +259,13 @@ class TelegramChatHandler:
         pair_pl_week = {}
         for t in week_trades:
             pair = t.get("pair", "Unknown")
-            pair_pl_week[pair] = round(pair_pl_week.get(pair, 0) + t.get("pl", 0), 2)
+            pair_pl_week[pair] = round(pair_pl_week.get(pair, 0) + (t.get("pl") or 0), 2)
 
         data["this_week"] = {
             "total_trades": len(week_trades),
-            "net_pl":       round(sum(t.get("pl", 0) for t in week_trades), 2),
+            "net_pl":       round(sum(t.get("pl") or 0 for t in week_trades), 2),
             "win_rate":     round(
-                len([t for t in week_trades if t.get("pl", 0) > 0]) / len(week_trades) * 100, 1
+                len([t for t in week_trades if (t.get("pl") or 0) > 0]) / len(week_trades) * 100, 1
             ) if week_trades else 0,
             "pl_by_pair":   pair_pl_week,
             "best_pair":    max(pair_pl_week, key=pair_pl_week.get) if pair_pl_week else None,

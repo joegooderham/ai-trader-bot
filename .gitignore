@@ -20,6 +20,10 @@ env/
 
 # Data files (trade history stays local — push manually if you want backup)
 data/*.json
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.migrated
 logs/
 
 # ML model weights (large files — store separately if needed)

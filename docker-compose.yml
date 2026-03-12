@@ -20,7 +20,7 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
-      - ./data:/app/data
+      - ./data_store:/app/data_store
       - ./logs:/app/logs
       - ./config:/app/config
     depends_on:
@@ -44,7 +44,7 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
-      - ./data:/app/data
+      - ./data_store:/app/data_store
     ports:
       - "8090:8090"
     networks:

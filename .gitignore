@@ -24,7 +24,8 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/*.migrated
-data-uat/
+data_store/
+data_store_uat/
 logs/
 logs-uat/
 

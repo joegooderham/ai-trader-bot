@@ -307,7 +307,7 @@ class IGClient:
         """Returns approximate total value deployed in open positions."""
         positions = self.get_open_trades()
         return sum(
-            float(p.get("dealSize", 0)) * float(p.get("level", 0))
+            float(p.get("dealSize") or 0) * float(p.get("level") or 0)
             for p in positions
         )
 

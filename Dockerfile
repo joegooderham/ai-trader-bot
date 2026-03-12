@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create directories for data persistence
-RUN mkdir -p /app/data /app/logs
+RUN mkdir -p /app/data_store /app/logs
 
 # Default command — runs the main trading bot scheduler
 CMD ["python", "-m", "bot.scheduler"]

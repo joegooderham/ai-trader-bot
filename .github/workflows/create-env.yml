@@ -33,7 +33,7 @@ jobs:
           MAX_CAPITAL=500
           MIN_CONFIDENCE_SCORE=60
           HOLD_OVERNIGHT_THRESHOLD=98
-          DATA_DIR=/app/data
+          DATA_DIR=/app/data_store
           "@ | Set-Content -Path .env -Encoding UTF8
 
           Write-Host ".env file created successfully"

@@ -96,7 +96,7 @@ CLAUDE_MODEL = _cfg["mcp"]["claude_model"]
 
 # ── Data Storage ─────────────────────────────────────────────────────────────
 
-DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
+DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data_store"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 INITIAL_HISTORY_DAYS = _cfg["data"]["initial_history_days"]

@@ -16,7 +16,9 @@ What runs and when:
 Run with: python -m bot.scheduler
 """
 
+import os
 import sys
+import time
 import asyncio
 import threading
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -387,17 +389,28 @@ def main():
     # Run Telegram chat handler in the main thread — this is required because
     # set_wakeup_fd (used internally by python-telegram-bot) only works in
     # the main thread of the main interpreter
-    logger.info("🤖 Starting Telegram chat interface in main thread...")
-    try:
-        chat_app = chat_handler.build_app()
-        chat_app.run_polling(drop_pending_updates=True)
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-        scheduler.shutdown()
-        notifier._send("⚠️ *Bot Stopped* — manually stopped by user.")
-    except Exception as e:
-        logger.error(f"Telegram polling error: {e}")
-        scheduler.shutdown()
+    if os.getenv("DISABLE_TELEGRAM", "").lower() in ("1", "true", "yes"):
+        logger.info("📵 Telegram disabled (DISABLE_TELEGRAM=1) — running scheduler only")
+        try:
+            import signal
+            signal.signal(signal.SIGTERM, lambda *_: scheduler.shutdown())
+            while True:
+                time.sleep(60)
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+            scheduler.shutdown()
+    else:
+        logger.info("🤖 Starting Telegram chat interface in main thread...")
+        try:
+            chat_app = chat_handler.build_app()
+            chat_app.run_polling(drop_pending_updates=True)
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+            scheduler.shutdown()
+            notifier._send("⚠️ *Bot Stopped* — manually stopped by user.")
+        except Exception as e:
+            logger.error(f"Telegram polling error: {e}")
+            scheduler.shutdown()
 
 
 if __name__ == "__main__":

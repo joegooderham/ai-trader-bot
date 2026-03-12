@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /app/data /app/logs
+RUN mkdir -p /app/data_store /app/logs
 
 # Run the MCP analysis server
 CMD ["python", "-m", "mcp_server.server"]

@@ -45,6 +45,8 @@ logger.add("/app/logs/forex_bot_{time:YYYY-MM-DD}.log", rotation="00:00", retent
 # ── Initialise all components ─────────────────────────────────────────────────
 broker = OandaClient()
 notifier = TelegramNotifier()
+# Connect notifier to broker so it can send Telegram alerts on yfinance fallback
+broker.set_notifier(notifier)
 eod_manager = EODManager(broker, notifier)
 storage = TradeStorage()
 context_writer = ContextWriter(broker=broker)

@@ -42,6 +42,59 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+@app.get("/test-fallback")
+async def test_yfinance_fallback():
+    """
+    Test endpoint to verify yfinance fallback is working.
+
+    Fetches 10 candles from yfinance for all configured pairs and returns
+    the results. Use this to confirm the fallback data source is healthy
+    without needing to wait for an actual IG failure.
+
+    Example: GET /test-fallback
+    """
+    import yfinance as yf
+    from broker.ig_client import YFINANCE_TICKERS, YFINANCE_INTERVALS
+
+    results = {}
+    granularity = config.TIMEFRAME if hasattr(config, "TIMEFRAME") else "H1"
+    interval = YFINANCE_INTERVALS.get(granularity, "1h")
+
+    for pair in config.PAIRS:
+        ticker_symbol = YFINANCE_TICKERS.get(pair)
+        if not ticker_symbol:
+            results[pair] = {"status": "error", "reason": "no ticker mapping"}
+            continue
+
+        try:
+            ticker = yf.Ticker(ticker_symbol)
+            df = ticker.history(period="5d", interval=interval)
+
+            if df is None or df.empty:
+                results[pair] = {"status": "error", "reason": "no data returned"}
+            else:
+                # Return the last 3 candles as a sample
+                sample = df.tail(3)
+                results[pair] = {
+                    "status": "ok",
+                    "ticker": ticker_symbol,
+                    "candles_available": len(df),
+                    "latest_close": round(float(sample.iloc[-1]["Close"]), 5),
+                    "latest_time": str(sample.index[-1]),
+                }
+        except Exception as e:
+            results[pair] = {"status": "error", "reason": str(e)}
+
+    all_ok = all(r.get("status") == "ok" for r in results.values())
+
+    return JSONResponse(content={
+        "test": "yfinance_fallback",
+        "overall_status": "healthy" if all_ok else "degraded",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pairs": results,
+    })
+
+
 @app.get("/context/{pair}")
 async def get_market_context(pair: str):
     """

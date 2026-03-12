@@ -33,15 +33,32 @@ class TelegramNotifier:
         self.chat_id = config.TELEGRAM_CHAT_ID
 
     def _send(self, message: str):
-        """Send a message (sync wrapper around async Telegram library)."""
+        """Send a message (sync wrapper around async Telegram library).
+        Works from any thread by creating a new event loop if needed."""
         try:
-            asyncio.get_event_loop().run_until_complete(
-                self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text=message,
-                    parse_mode=ParseMode.MARKDOWN
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                # Already inside an async context — schedule as a task
+                loop.create_task(
+                    self.bot.send_message(
+                        chat_id=self.chat_id,
+                        text=message,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
                 )
-            )
+            else:
+                # No event loop running (background thread) — create one
+                asyncio.run(
+                    self.bot.send_message(
+                        chat_id=self.chat_id,
+                        text=message,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                )
             logger.debug(f"Telegram message sent: {message[:60]}...")
         except Exception as e:
             logger.error(f"Failed to send Telegram message: {e}")

@@ -30,7 +30,7 @@ from loguru import logger
 from bot import config
 from data.storage import TradeStorage
 
-CONTEXT_FILE = Path("/app/data/LIVE_CONTEXT.md")
+CONTEXT_FILE = config.DATA_DIR / "LIVE_CONTEXT.md"
 
 
 class ContextWriter:
@@ -84,9 +84,9 @@ Use it to ask questions and get deep analysis about trading activity."""
 
         if self.broker:
             try:
-                balance = self.broker.get_account_balance()
-                open_trades = self.broker.get_open_trades()
-                deployed = self.broker.get_open_positions_value()
+                balance = self.broker.get_account_balance() or 0
+                open_trades = self.broker.get_open_trades() or []
+                deployed = self.broker.get_open_positions_value() or 0
 
                 lines.append(f"- **Balance:** £{balance:.2f}")
                 lines.append(f"- **Capital Limit:** £{config.MAX_CAPITAL}")

@@ -159,7 +159,7 @@ notifications:
 #   1. Copy this entire project to the new machine
 #   2. Set instance_id to "secondary" on the new machine
 #   3. Change the pairs list to the pairs you want that instance to trade
-#   4. Both instances can share the same OANDA account safely —
+#   4. Both instances can share the same IG account safely —
 #      they each own different pairs so there's no overlap or double-trading
 #
 # Example split:

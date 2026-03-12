@@ -88,7 +88,7 @@ Each 15-minute scan:
 - IG epic mapping (e.g., `EUR_USD` → `CS.D.EURUSD.MINI.IP`) is defined in `broker/ig_client.py`
 - Demo account has 10,000 data points/week limit — candle caching strategy keeps usage ~1,320 points/week
 - Auth uses CST + X-SECURITY-TOKEN headers with 6-hour auto-refresh
-- The bot was recently migrated from Oanda to IG; `broker/oanda_client.py` is legacy/unused
+- The bot was migrated from Oanda to IG; all Oanda references have been removed
 
 ## Git Workflow Rules
 
@@ -144,3 +144,4 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 - Minimum trade size: 1 IG mini CFD contract (10,000 currency units)
 - `data/LIVE_CONTEXT.md` is auto-generated — do not manually edit
 - Telegram bot must poll on the main thread (Python's `set_wakeup_fd` requirement)
+2

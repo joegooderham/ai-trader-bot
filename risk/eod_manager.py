@@ -189,7 +189,7 @@ class EODManager:
 
             logger.info(f"Tightening stop-loss for {pair} (trade {trade_id}) to {new_stop:.5f}")
 
-            # Note: Updating stop-loss via OANDA API requires a separate call
+            # Note: Updating stop-loss via IG API requires a separate call
             # Full implementation would call broker.update_stop_loss(trade_id, new_stop)
 
         except Exception as e:

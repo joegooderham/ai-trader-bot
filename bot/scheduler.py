@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from bot import config
 from bot.engine import indicators, confidence
 from bot.engine.daily_plan import DailyPlanGenerator
-from broker.ig_client import IGClient as OandaClient
+from broker.ig_client import IGClient
 from notifications.telegram_bot import TelegramNotifier
 from notifications.telegram_chat import TelegramChatHandler
 from risk.position_sizer import calculate_position_size
@@ -43,7 +43,7 @@ logger.add(sys.stdout, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
 logger.add("/app/logs/forex_bot_{time:YYYY-MM-DD}.log", rotation="00:00", retention="30 days", level="DEBUG")
 
 # ── Initialise all components ─────────────────────────────────────────────────
-broker = OandaClient()
+broker = IGClient()
 notifier = TelegramNotifier()
 # Connect notifier to broker so it can send Telegram alerts on yfinance fallback
 broker.set_notifier(notifier)

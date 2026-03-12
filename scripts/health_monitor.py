@@ -7,7 +7,7 @@ Sends a Telegram alert within 60 seconds if anything goes wrong.
 Checks:
   - Is the trading bot running? (HTTP health endpoint)
   - Is the MCP server running? (HTTP health endpoint)
-  - Is the OANDA API reachable?
+  - Is the IG API reachable?
   - Is there enough disk space?
   - Has the bot made any trades recently? (are we stuck?)
 
@@ -40,11 +40,11 @@ def check_service(name: str, url: str) -> bool:
         return False
 
 
-def check_oanda_api() -> bool:
-    """Verify OANDA API is reachable."""
+def check_ig_api() -> bool:
+    """Verify IG API is reachable by fetching account balance."""
     try:
-        from broker.oanda_client import OandaClient
-        client = OandaClient()
+        from broker.ig_client import IGClient
+        client = IGClient()
         balance = client.get_account_balance()
         return balance is not None
     except Exception:
@@ -87,17 +87,18 @@ def run_health_checks():
         _known_issues.discard("mcp_down")
         notifier.health_recovered("MCP Analysis Server Offline")
 
-    # Check OANDA API
-    oanda_ok = check_oanda_api()
-    if not oanda_ok and "oanda_down" not in _known_issues:
-        _known_issues.add("oanda_down")
+    # Check IG API
+    ig_ok = check_ig_api()
+    if not ig_ok and "ig_down" not in _known_issues:
+        _known_issues.add("ig_down")
         notifier.health_alert(
-            "OANDA API Unreachable",
-            "Cannot connect to OANDA. Open positions cannot be managed. Check your internet connection."
+            "IG API Unreachable",
+            "Cannot connect to IG Group. Open positions cannot be managed. "
+            "The bot will use yfinance for candle data but cannot place trades."
         )
-    elif oanda_ok and "oanda_down" in _known_issues:
-        _known_issues.discard("oanda_down")
-        notifier.health_recovered("OANDA API Unreachable")
+    elif ig_ok and "ig_down" in _known_issues:
+        _known_issues.discard("ig_down")
+        notifier.health_recovered("IG API Unreachable")
 
     # Check disk space
     disk_ok, free_gb = check_disk_space()

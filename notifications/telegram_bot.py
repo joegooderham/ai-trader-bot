@@ -258,6 +258,28 @@ class TelegramNotifier:
 
     # ── Health Alerts ─────────────────────────────────────────────────────────
 
+    def data_source_fallback(self, pair: str, reason: str):
+        """
+        Sent when the bot falls back from IG to yfinance for candle data.
+        This means IG is unavailable (403, timeout, etc.) but the bot is
+        still scanning using free Yahoo Finance data as a backup.
+        """
+        pair_display = pair.replace("_", "/")
+
+        message = (
+            f"*🔄 DATA SOURCE FALLBACK*\n"
+            f"─────────────────────\n"
+            f"*Pair:* {pair_display}\n"
+            f"*Primary (IG):* Failed\n"
+            f"*Fallback (yfinance):* Active\n"
+            f"*Reason:* {reason}\n"
+            f"─────────────────────\n"
+            f"The bot is still scanning using Yahoo Finance data.\n"
+            f"yfinance data may be ~15 min delayed.\n"
+            f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+        )
+        self._send(message)
+
     def health_alert(self, issue: str, details: str):
         """
         Sent immediately if something goes wrong with the bot.

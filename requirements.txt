@@ -10,7 +10,7 @@ httpx==0.25.2                  # IG Group API client (async HTTP)
 pandas==2.1.4                  # Data manipulation and analysis
 numpy==1.26.2                  # Numerical computing
 ta==0.11.0                     # Technical indicators (RSI, MACD, Bollinger Bands etc.)
-yfinance==0.2.36               # Free historical Forex data from Yahoo Finance
+yfinance>=1.2.0                # Free historical Forex data from Yahoo Finance
 
 # Machine Learning
 scikit-learn==1.3.2            # ML utilities (scaling, metrics)

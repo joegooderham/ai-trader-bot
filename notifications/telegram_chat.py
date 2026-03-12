@@ -66,6 +66,7 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("health", self.cmd_health))
         self.app.add_handler(CommandHandler("plan", self.cmd_tomorrow_plan))
         self.app.add_handler(CommandHandler("stats", self.cmd_stats))
+        self.app.add_handler(CommandHandler("fallbacktest", self.cmd_fallback_test))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
 
         return self.app
@@ -82,7 +83,8 @@ class TelegramChatHandler:
             "*/positions* — Currently open positions\n"
             "*/health* — System health status\n"
             "*/plan* — Tomorrow's trading plan\n"
-            "*/stats* — All-time performance stats\n\n"
+            "*/stats* — All-time performance stats\n"
+            "*/fallbacktest* — Test yfinance backup data source\n\n"
             "*Or just ask naturally, for example:*\n"
             "_\"How did EUR/USD perform this week?\"_\n"
             "_\"Why did the bot make that last trade?\"_\n"
@@ -106,6 +108,51 @@ class TelegramChatHandler:
 
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self.handle_question(update, context, override_question="Give me a full performance summary with all stats since the bot started.")
+
+    async def cmd_fallback_test(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Test yfinance fallback data source — hits MCP /test-fallback endpoint."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get("http://mcp-server:8090/test-fallback")
+                data = r.json()
+
+            status_emoji = "✅" if data.get("overall_status") == "healthy" else "⚠️"
+            message = (
+                f"*{status_emoji} YFINANCE FALLBACK TEST*\n"
+                f"─────────────────────────────\n"
+                f"*Overall:* {data.get('overall_status', 'unknown').upper()}\n\n"
+            )
+
+            for pair, result in data.get("pairs", {}).items():
+                pair_display = pair.replace("_", "/")
+                if result.get("status") == "ok":
+                    message += (
+                        f"✅ *{pair_display}*: {result['candles_available']} candles | "
+                        f"close={result['latest_close']}\n"
+                    )
+                else:
+                    message += f"❌ *{pair_display}*: {result.get('reason', 'failed')}\n"
+
+            message += (
+                f"\n─────────────────────────────\n"
+                f"If IG goes down, these prices keep the bot scanning.\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            )
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Fallback test command failed: {e}")
+            await update.message.reply_text(
+                "⚠️ Could not reach MCP server to test yfinance fallback.\n"
+                f"Error: {str(e)[:200]}"
+            )
 
     # ── Main Question Handler ─────────────────────────────────────────────────
 

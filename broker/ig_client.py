@@ -155,9 +155,21 @@ class IGClient:
         # Avoids re-fetching all 60 candles on every scan — only tops up new ones.
         self._candle_cache: dict = {}
 
+        # Optional Telegram notifier — set via set_notifier() after construction
+        # to avoid circular imports (scheduler creates both IGClient and TelegramNotifier)
+        self._notifier = None
+
         self._authenticate()
         env = "DEMO" if "demo" in self.base_url else "LIVE ⚠️"
         logger.info(f"Connected to IG Group ({env} account: {self.account_id})")
+
+    def set_notifier(self, notifier):
+        """
+        Attach a TelegramNotifier instance so the client can send alerts
+        when falling back to yfinance. Called by scheduler after both
+        IGClient and TelegramNotifier are initialised.
+        """
+        self._notifier = notifier
 
     # ── Authentication ────────────────────────────────────────────────────────
 
@@ -400,7 +412,19 @@ class IGClient:
 
         # IG failed — try yfinance as fallback
         logger.warning(f"IG candle fetch failed for {pair} — falling back to yfinance")
-        return self._fetch_candles_from_yfinance(pair, count=count, granularity=granularity)
+        fallback_df = self._fetch_candles_from_yfinance(pair, count=count, granularity=granularity)
+
+        # Notify via Telegram so Joseph knows the bot switched data sources
+        if fallback_df is not None and not fallback_df.empty and self._notifier:
+            try:
+                self._notifier.data_source_fallback(
+                    pair=pair,
+                    reason="IG API returned no data (possible 403 rate limit or outage)"
+                )
+            except Exception as e:
+                logger.error(f"Failed to send fallback Telegram alert: {e}")
+
+        return fallback_df
 
     def _fetch_candles_from_yfinance(
         self,

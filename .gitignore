@@ -24,7 +24,9 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/*.migrated
+data-uat/
 logs/
+logs-uat/
 
 # ML model weights (large files — store separately if needed)
 models/*.h5

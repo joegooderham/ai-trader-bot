@@ -1,0 +1,90 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Trader Bot - UAT / Testing Stack
+# ─────────────────────────────────────────────────────────────────────────────
+# Runs alongside production on different ports and container names.
+# Uses a separate data directory so UAT never touches production data.
+#
+# Usage:
+#   docker-compose -f docker-compose.uat.yml build
+#   docker-compose -f docker-compose.uat.yml up -d
+#   docker-compose -f docker-compose.uat.yml down
+#   docker-compose -f docker-compose.uat.yml logs -f
+#
+# Promote to production:
+#   docker-compose -f docker-compose.uat.yml down
+#   docker-compose up -d --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  forex-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-trader-bot-uat
+    restart: unless-stopped
+    environment:
+      - IG_API_KEY=${IG_API_KEY}
+      - IG_ACCOUNT_ID=${IG_ACCOUNT_ID}
+      - IG_USERNAME=${IG_USERNAME}
+      - IG_PASSWORD=${IG_PASSWORD}
+      - IG_ENVIRONMENT=${IG_ENVIRONMENT}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - ./data-uat:/app/data
+      - ./logs-uat:/app/logs
+      - ./config:/app/config
+    depends_on:
+      - mcp-server
+    networks:
+      - forex-network-uat
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    container_name: ai-trader-mcp-uat
+    restart: unless-stopped
+    environment:
+      - IG_API_KEY=${IG_API_KEY}
+      - IG_ACCOUNT_ID=${IG_ACCOUNT_ID}
+      - IG_USERNAME=${IG_USERNAME}
+      - IG_PASSWORD=${IG_PASSWORD}
+      - IG_ENVIRONMENT=${IG_ENVIRONMENT}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - ./data-uat:/app/data
+    ports:
+      - "8091:8090"
+    networks:
+      - forex-network-uat
+
+  health-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-trader-health-uat
+    restart: unless-stopped
+    environment:
+      - IG_API_KEY=${IG_API_KEY}
+      - IG_ACCOUNT_ID=${IG_ACCOUNT_ID}
+      - IG_USERNAME=${IG_USERNAME}
+      - IG_PASSWORD=${IG_PASSWORD}
+      - IG_ENVIRONMENT=${IG_ENVIRONMENT}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    command: ["python", "-m", "scripts.health_monitor"]
+    depends_on:
+      - forex-bot
+      - mcp-server
+    networks:
+      - forex-network-uat
+
+networks:
+  forex-network-uat:
+    driver: bridge

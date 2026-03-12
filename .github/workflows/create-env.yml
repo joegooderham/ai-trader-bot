@@ -1,0 +1,32 @@
+name: Create .env file
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-env:
+    runs-on: self-hosted
+    steps:
+      - name: Write .env from GitHub Secrets
+        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        run: |
+          cat > .env << 'HEADER'
+          # Auto-generated from GitHub Secrets — do not commit
+          HEADER
+
+          cat >> .env << EOF
+          IG_API_KEY=${{ secrets.IG_API_KEY }}
+          IG_USERNAME=${{ secrets.IG_USERNAME }}
+          IG_PASSWORD=${{ secrets.IG_PASSWORD }}
+          IG_ACCOUNT_ID=${{ secrets.IG_ACCOUNT_ID }}
+          IG_ENVIRONMENT=${{ secrets.IG_ENVIRONMENT }}
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          MAX_CAPITAL=500
+          MIN_CONFIDENCE_SCORE=60
+          HOLD_OVERNIGHT_THRESHOLD=98
+          DATA_DIR=/app/data
+          EOF
+
+          echo ".env file created successfully"

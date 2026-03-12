@@ -24,6 +24,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          docker-compose down
-          docker-compose build --no-cache
-          docker-compose up -d
+          docker-compose up -d --build

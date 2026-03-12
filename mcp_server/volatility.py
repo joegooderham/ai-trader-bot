@@ -86,10 +86,10 @@ async def get_volatility_details(pair: str) -> dict:
         }
     """
     try:
-        from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
+        from broker.ig_client import IGClient
         import pandas_ta as ta
 
-        client = OandaClient()
+        client = IGClient()
         df = client.get_candles(pair, count=50, granularity="H1")
 
         if df is None or len(df) < 20:
@@ -153,10 +153,10 @@ async def get_volatility_details(pair: str) -> dict:
 async def _calculate_regime(pair: str) -> str:
     """Calculate the volatility regime from live price data."""
     try:
-        from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
+        from broker.ig_client import IGClient
         import pandas_ta as ta
 
-        client = OandaClient()
+        client = IGClient()
         df = client.get_candles(pair, count=50, granularity="H1")
 
         if df is None or len(df) < 20:

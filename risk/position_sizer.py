@@ -3,7 +3,7 @@ risk/position_sizer.py — Position Sizing for IG Mini CFD Contracts
 ────────────────────────────────────────────────────────────────────
 Calculates how many IG contracts to trade on each position.
 
-IG Mini CFDs use CONTRACT SIZE (not units like OANDA):
+IG Mini CFDs use CONTRACT SIZE:
   - Minimum size = 1 contract
   - 1 contract = 1 mini lot = 10,000 currency units
   - Pip value per contract ≈ £0.80–£1.00 depending on pair

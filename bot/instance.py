@@ -32,7 +32,7 @@ Pair ownership:
   Instance 1 config.yaml:   pairs: [EUR_USD, GBP_USD, USD_CHF]
   Instance 2 config.yaml:   pairs: [USD_JPY, AUD_USD, USD_CAD]
 
-  That's it. Both instances share the same OANDA account safely.
+  That's it. Both instances share the same IG account safely.
 """
 
 import json

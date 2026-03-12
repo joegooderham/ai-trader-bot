@@ -103,7 +103,7 @@ class DailyPlanGenerator:
                 "pairs": [p.replace("_", "/") for p in config.PAIRS],
                 "min_confidence": config.MIN_CONFIDENCE_SCORE,
                 "max_capital": config.MAX_CAPITAL,
-                "environment": config.OANDA_ENVIRONMENT,
+                "environment": config.IG_ENVIRONMENT,
             }
         }
 

@@ -32,7 +32,7 @@ import httpx
 
 from bot import config
 from data.storage import TradeStorage
-from broker.ig_client import IGClient as OandaClient
+from broker.ig_client import IGClient
 
 
 class TelegramChatHandler:
@@ -45,7 +45,7 @@ class TelegramChatHandler:
 
     def __init__(self):
         self.storage = TradeStorage()
-        self.broker = OandaClient()
+        self.broker = IGClient()
         self.claude = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         self.app = None
 

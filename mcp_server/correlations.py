@@ -26,7 +26,7 @@ Correlation scale:
   < -0.75  = Inversely correlated — WARN if opposite direction
              (hedges are ok, but can mask losses)
 
-Data: Uses OANDA API price data (already available, no extra cost)
+Data: Uses IG API price data (already available, no extra cost)
 """
 
 import numpy as np
@@ -62,7 +62,7 @@ async def get_correlation_warning(pair: str, open_positions: list = None) -> dic
 
     Args:
         pair: The pair being considered for a new trade
-        open_positions: List of currently open trade dicts from OANDA
+        open_positions: List of currently open trade dicts from IG
 
     Returns:
         Dict of {pair: correlated_pair_name} for any dangerous correlations.
@@ -166,8 +166,8 @@ async def _calculate_live_correlation(pair1: str, pair2: str, periods: int = 100
 
     try:
         # Import here to avoid circular imports
-        from broker.ig_client import IGClient as OandaClient  # IG drop-in replacement
-        client = OandaClient()
+        from broker.ig_client import IGClient
+        client = IGClient()
 
         df1 = client.get_candles(pair1, count=periods, granularity="H1")
         df2 = client.get_candles(pair2, count=periods, granularity="H1")

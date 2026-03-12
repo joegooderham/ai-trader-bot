@@ -27,6 +27,7 @@ Data Allowance Strategy (IG demo = 10,000 points/week):
 
 import httpx
 import pandas as pd
+import yfinance as yf
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 from typing import Optional
@@ -60,6 +61,47 @@ IG_DEAL_CURRENCY = {
     "EUR_GBP": "GBP",
     "EUR_JPY": "JPY",
     "NZD_USD": "USD",
+}
+
+# ── yfinance Ticker Mapping ──────────────────────────────────────────────────
+# yfinance uses "EURUSD=X" format for forex pairs — no underscore, suffix =X
+YFINANCE_TICKERS = {
+    "EUR_USD": "EURUSD=X",
+    "GBP_USD": "GBPUSD=X",
+    "USD_JPY": "USDJPY=X",
+    "AUD_USD": "AUDUSD=X",
+    "USD_CAD": "USDCAD=X",
+    "USD_CHF": "USDCHF=X",
+    "GBP_JPY": "GBPJPY=X",
+    "EUR_GBP": "EURGBP=X",
+    "EUR_JPY": "EURJPY=X",
+    "NZD_USD": "NZDUSD=X",
+}
+
+# Map our timeframe codes to yfinance interval strings
+# yfinance supports: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk
+YFINANCE_INTERVALS = {
+    "M1":  "1m",
+    "M5":  "5m",
+    "M15": "15m",
+    "M30": "30m",
+    "H1":  "1h",
+    "H4":  "4h",    # yfinance doesn't support 4h — will fall back to 1h
+    "D":   "1d",
+    "W":   "1wk",
+}
+
+# yfinance limits the lookback period based on interval granularity
+# e.g. 1m data only available for last 7 days, 1h for last 730 days
+YFINANCE_PERIOD_MAP = {
+    "1m":  "7d",
+    "5m":  "60d",
+    "15m": "60d",
+    "30m": "60d",
+    "1h":  "730d",
+    "4h":  "730d",
+    "1d":  "max",
+    "1wk": "max",
 }
 
 # IG resolution strings for candle data
@@ -315,7 +357,7 @@ class IGClient:
 
             # New candle period has opened — top up with just 3 candles
             logger.debug(f"Cache top-up for {pair} {granularity} — fetching 3 candles")
-            new_df = self._fetch_candles_from_ig(pair, count=3, granularity=granularity)
+            new_df = self._fetch_candles_with_fallback(pair, count=3, granularity=granularity)
             if new_df is not None and not new_df.empty:
                 combined = pd.concat([cached["df"], new_df])
                 combined = combined[~combined.index.duplicated(keep="last")]
@@ -330,15 +372,98 @@ class IGClient:
                 logger.warning(f"Cache top-up failed for {pair} — returning stale cache")
                 return cached["df"]
 
-        # No cache yet — do the full fetch
+        # No cache yet — do the full fetch, falling back to yfinance if IG fails
         logger.debug(f"Cache miss for {pair} {granularity} — fetching {count} candles")
-        df = self._fetch_candles_from_ig(pair, count=count, granularity=granularity)
+        df = self._fetch_candles_with_fallback(pair, count=count, granularity=granularity)
         if df is not None and not df.empty:
             self._candle_cache[cache_key] = {
                 "df":               df,
                 "last_candle_time": df.index[-1].to_pydatetime(),
             }
         return df
+
+    def _fetch_candles_with_fallback(
+        self,
+        pair: str,
+        count: int,
+        granularity: str,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Try IG first, fall back to yfinance on failure (e.g. 403 rate limit).
+
+        yfinance is free with no rate limits, making it a reliable backup when
+        IG's demo data allowance is exhausted or the API is temporarily unavailable.
+        """
+        df = self._fetch_candles_from_ig(pair, count=count, granularity=granularity)
+        if df is not None and not df.empty:
+            return df
+
+        # IG failed — try yfinance as fallback
+        logger.warning(f"IG candle fetch failed for {pair} — falling back to yfinance")
+        return self._fetch_candles_from_yfinance(pair, count=count, granularity=granularity)
+
+    def _fetch_candles_from_yfinance(
+        self,
+        pair: str,
+        count: int,
+        granularity: str,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetch candle data from Yahoo Finance as a free fallback source.
+
+        yfinance has no API key, no rate limits, and no cost. The trade-off is
+        slightly delayed data (~15 min) and no volume for some forex pairs,
+        but it's good enough to keep the bot scanning when IG is unavailable.
+        """
+        ticker_symbol = YFINANCE_TICKERS.get(pair)
+        if not ticker_symbol:
+            logger.error(f"No yfinance ticker mapping for pair: {pair}")
+            return None
+
+        interval = YFINANCE_INTERVALS.get(granularity, "1h")
+        period = YFINANCE_PERIOD_MAP.get(interval, "730d")
+
+        try:
+            ticker = yf.Ticker(ticker_symbol)
+            # Fetch more rows than needed so we can trim to exact count,
+            # because yfinance doesn't support an exact "max rows" parameter
+            df = ticker.history(period=period, interval=interval)
+
+            if df is None or df.empty:
+                logger.error(f"yfinance returned no data for {ticker_symbol}")
+                return None
+
+            # Normalise column names to match our IG format (lowercase OHLCV)
+            df = df.rename(columns={
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            })
+
+            # Keep only the columns our indicators expect
+            df = df[["open", "high", "low", "close", "volume"]]
+
+            # Ensure timezone-aware UTC index to match IG candle format
+            if df.index.tz is None:
+                df.index = df.index.tz_localize("UTC")
+            else:
+                df.index = df.index.tz_convert("UTC")
+            df.index.name = "datetime"
+
+            # Trim to requested count
+            df = df.tail(count)
+
+            logger.info(
+                f"yfinance fallback: got {len(df)} candles for {pair} "
+                f"({interval}, {ticker_symbol})"
+            )
+            return df
+
+        except Exception as e:
+            logger.error(f"yfinance fallback failed for {pair}: {e}")
+            return None
 
     def _fetch_candles_from_ig(
         self,

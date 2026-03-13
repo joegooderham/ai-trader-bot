@@ -31,6 +31,23 @@ trading:
   # Options: M5 (5min), M15 (15min), H1 (1hour), H4 (4hour)
   timeframe: H1
 
+  # ── Session-Aware Trading (BACKLOG-006) ────────────────────────────────────
+  # Adjusts the minimum confidence threshold based on the current trading session.
+  # During low-activity sessions (Sydney/Tokyo for most pairs), the bar is raised
+  # so only the strongest signals get through. During peak sessions (London/NY
+  # overlap), the standard threshold applies.
+  #
+  # Set to 0 to disable session adjustments entirely.
+  session_confidence_boost:
+    overlap:  -5     # London/NY overlap: best conditions, slightly lower bar
+    london:    0     # London: standard threshold
+    new_york:  0     # New York: standard threshold
+    tokyo:     10    # Tokyo: raise bar by 10 (except JPY pairs)
+    sydney:    15    # Sydney: quietest session, raise bar by 15
+
+  # JPY pairs are exempt from Tokyo session penalty (they're most active then)
+  session_jpy_exempt_from_tokyo: true
+
   # Number of historical candles to analyse for each signal
   lookback_candles: 60
 

@@ -798,10 +798,24 @@ class IGClient:
 
                 # IG API v2 uses "size" not "dealSize", and doesn't return upl directly
                 # Calculate unrealized P&L from entry level vs current bid/offer
-                size      = position.get("size") or position.get("dealSize") or 0
-                level     = position.get("level") or 0
+                raw_size  = position.get("size") or position.get("dealSize")
+                raw_level = position.get("level")
                 direction = position.get("direction", "")
-                contract  = position.get("contractSize", 10000)
+                deal_id   = position.get("dealId")
+
+                # Guard: IG occasionally returns None for size/level on positions
+                # that are being closed or in an intermediate state. Skip these
+                # to avoid ghost positions counting against max_open_positions.
+                if not raw_size or not raw_level or not deal_id:
+                    logger.warning(
+                        f"Skipping position with missing data — "
+                        f"dealId={deal_id}, size={raw_size}, level={raw_level}, epic={epic}"
+                    )
+                    continue
+
+                size     = float(raw_size)
+                level    = float(raw_level)
+                contract = position.get("contractSize", 10000)
 
                 # Current price: use bid for SELL (closing a sell = buying), offer for BUY
                 current_price = market.get("bid") if direction == "BUY" else market.get("offer")
@@ -823,7 +837,7 @@ class IGClient:
                 upl = pips_moved * pip_value * size
 
                 result.append({
-                    "dealId":       position.get("dealId"),
+                    "dealId":       deal_id,
                     "pair":         pair,
                     "epic":         epic,
                     "instrument":   pair,

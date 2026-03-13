@@ -64,6 +64,8 @@ def calculate_position_size(
     """
     # Max loss amount for this trade
     max_loss_amount = config.MAX_CAPITAL * config.PER_TRADE_RISK_PCT / 100
+    # Hard cap: never risk more than max_per_trade_spend per trade
+    max_loss_amount = min(max_loss_amount, config.MAX_PER_TRADE_SPEND)
     max_loss_amount = min(max_loss_amount, available_capital * 0.2)
     max_loss_amount = max(max_loss_amount, 1.0)  # At least £1
 

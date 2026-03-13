@@ -147,6 +147,9 @@ _circuit_breaker_until: datetime = None
 _day_start_balance: float = None
 _day_start_date: str = None
 
+# Manual pause flag — set via /pause Telegram command, cleared via /resume
+_trading_paused: bool = False
+
 
 def _check_circuit_breaker() -> bool:
     """
@@ -217,6 +220,11 @@ def scan_markets():
     """
     if not instance_manager.is_active():
         logger.debug(f"Instance {config.INSTANCE_ID} is not active — skipping scan")
+        return
+
+    # Manual pause: user can pause trading via /pause Telegram command
+    if _trading_paused:
+        logger.info("Trading paused via Telegram — skipping market scan")
         return
 
     # Circuit breaker: pause all trading if daily drawdown exceeds threshold

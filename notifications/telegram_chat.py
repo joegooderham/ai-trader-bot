@@ -73,6 +73,10 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("devops", self.cmd_devops))
         self.app.add_handler(CommandHandler("backtest", self.cmd_backtest))
         self.app.add_handler(CommandHandler("trades", self.cmd_trades))
+        self.app.add_handler(CommandHandler("closeall", self.cmd_closeall))
+        self.app.add_handler(CommandHandler("close", self.cmd_close))
+        self.app.add_handler(CommandHandler("pause", self.cmd_pause))
+        self.app.add_handler(CommandHandler("resume", self.cmd_resume))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
 
         return self.app
@@ -90,6 +94,10 @@ class TelegramChatHandler:
             "*/health* — System health status\n"
             "*/plan* — Tomorrow's trading plan\n"
             "*/trades* — Recent trades with index numbers\n"
+            "*/close* `<#>` — Close a specific trade (e.g. `/close 5`)\n"
+            "*/closeall* — Close all open positions now\n"
+            "*/pause* — Pause bot from opening new trades\n"
+            "*/resume* — Resume trading after a pause\n"
             "*/stats* — All-time performance stats\n"
             "*/fallbacktest* — Test yfinance backup data source\n"
             "*/query* `<question>` — Query trade database in plain English\n"
@@ -386,6 +394,176 @@ class TelegramChatHandler:
         except Exception as e:
             logger.error(f"Trades command failed: {e}")
             await update.message.reply_text(f"⚠️ Could not fetch trades: {str(e)[:200]}")
+
+    async def cmd_closeall(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Close all open positions immediately."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            results = self.broker.close_all_positions()
+
+            if not results:
+                await update.message.reply_text("No open positions to close.")
+                return
+
+            total_pl = sum(r.get("pl", 0) for r in results)
+            pl_sign = "+" if total_pl >= 0 else ""
+            pl_emoji = "✅" if total_pl >= 0 else "❌"
+
+            message = (
+                f"*{pl_emoji} ALL POSITIONS CLOSED*\n"
+                f"─────────────────────\n"
+                f"*Closed:* {len(results)} position(s)\n"
+                f"*Total P&L:* *{pl_sign}£{total_pl:.2f}*\n"
+                f"─────────────────────\n"
+            )
+
+            for r in results:
+                pl = r.get("pl", 0)
+                emoji = "✅" if pl >= 0 else "❌"
+                message += f"{emoji} {r.get('deal_id', '?')}: {'+'if pl >= 0 else ''}£{pl:.2f}\n"
+
+            message += f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Closeall command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to close positions: {str(e)[:200]}")
+
+    async def cmd_close(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Close a specific trade by its index number. Usage: /close 5"""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        args = update.message.text.replace("/close", "", 1).strip().lstrip("#")
+        if not args or not args.isdigit():
+            await update.message.reply_text(
+                "*Usage:* `/close <trade number>`\n\n"
+                "*Example:* `/close 5` — closes trade #5\n"
+                "Use `/trades` to see trade numbers, or `/positions` for open positions.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        trade_number = int(args)
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            # Look up the deal_id from the trade number
+            conn = sqlite3.connect(str(DB_PATH), timeout=10)
+            conn.row_factory = sqlite3.Row
+            try:
+                row = conn.execute(
+                    "SELECT deal_id, pair, direction, size FROM trades WHERE id = ?",
+                    (trade_number,)
+                ).fetchone()
+            finally:
+                conn.close()
+
+            if not row:
+                await update.message.reply_text(f"⚠️ Trade #{trade_number} not found in database.")
+                return
+
+            deal_id = row["deal_id"]
+            pair = (row["pair"] or "").replace("_", "/")
+            direction = row["direction"] or "BUY"
+            size = float(row["size"] or 1.0)
+
+            # Verify the position is actually still open on IG
+            open_trades = self.broker.get_open_trades()
+            matching = [t for t in open_trades if t.get("dealId") == deal_id]
+
+            if not matching:
+                await update.message.reply_text(
+                    f"Trade #{trade_number} ({pair} {direction}) is not currently open on IG.\n"
+                    f"It may have already been closed."
+                )
+                return
+
+            # Use the live size from IG in case it differs from the stored value
+            live_trade = matching[0]
+            live_size = float(live_trade.get("dealSize", size))
+            live_direction = live_trade.get("direction", direction)
+
+            result = self.broker.close_trade(deal_id, live_size, live_direction)
+
+            if result:
+                pl = result.get("pl", 0)
+                pl_sign = "+" if pl >= 0 else ""
+                emoji = "✅" if pl >= 0 else "❌"
+                await update.message.reply_text(
+                    f"*{emoji} TRADE #{trade_number} CLOSED*\n"
+                    f"─────────────────────\n"
+                    f"*Pair:* {pair}\n"
+                    f"*Direction:* {live_direction}\n"
+                    f"*P&L:* *{pl_sign}£{pl:.2f}*\n"
+                    f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                await update.message.reply_text(f"⚠️ Failed to close trade #{trade_number}. Check logs.")
+
+        except Exception as e:
+            logger.error(f"Close command failed: {e}")
+            await update.message.reply_text(f"⚠️ Error closing trade: {str(e)[:200]}")
+
+    async def cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Pause the bot from opening new trades."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        try:
+            import bot.scheduler as scheduler
+            if scheduler._trading_paused:
+                await update.message.reply_text("⏸ Trading is already paused. Use /resume to restart.")
+                return
+
+            scheduler._trading_paused = True
+            logger.info("Trading PAUSED via Telegram /pause command")
+            await update.message.reply_text(
+                "*⏸ TRADING PAUSED*\n"
+                "─────────────────────\n"
+                "The bot will not open any new trades.\n"
+                "Existing positions remain open and monitored.\n"
+                "Use */resume* to restart trading.\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Pause command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to pause: {str(e)[:200]}")
+
+    async def cmd_resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Resume trading after a /pause."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        try:
+            import bot.scheduler as scheduler
+            if not scheduler._trading_paused:
+                await update.message.reply_text("▶️ Trading is not paused — already running normally.")
+                return
+
+            scheduler._trading_paused = False
+            logger.info("Trading RESUMED via Telegram /resume command")
+            await update.message.reply_text(
+                "*▶️ TRADING RESUMED*\n"
+                "─────────────────────\n"
+                "The bot will resume scanning for trade signals.\n"
+                "Next scan will run at the next 15-minute interval.\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Resume command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to resume: {str(e)[:200]}")
 
     async def cmd_backtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Run LSTM backtest against historical data and report results."""

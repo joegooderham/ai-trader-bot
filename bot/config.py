@@ -65,6 +65,7 @@ PAIRS                = _cfg["trading"]["pairs"]
 SCAN_INTERVAL_MINUTES = _cfg["trading"]["scan_interval_minutes"]
 MAX_OPEN_POSITIONS   = _cfg["trading"]["max_open_positions"]
 PER_TRADE_RISK_PCT   = _cfg["trading"]["per_trade_risk_pct"]
+MAX_PER_TRADE_SPEND  = _cfg["trading"].get("max_per_trade_spend", 999.0)
 TIMEFRAME            = _cfg["trading"]["timeframe"]
 LOOKBACK_CANDLES     = _cfg["trading"]["lookback_candles"]
 ENABLE_STREAMING             = _cfg["trading"].get("enable_streaming", True)

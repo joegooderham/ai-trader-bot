@@ -64,15 +64,17 @@ class TelegramNotifier:
         take_profit: float,
         confidence_score: float,
         breakdown: dict,
-        reasoning: str
+        reasoning: str,
+        trade_number: int = None
     ):
         """Notification sent every time the bot opens a new trade."""
 
         direction_emoji = "📈" if direction == "BUY" else "📉"
         pair_display = pair.replace("_", "/")
+        trade_ref = f" (Trade #{trade_number})" if trade_number else ""
 
         message = (
-            f"*{direction_emoji} TRADE OPENED*\n"
+            f"*{direction_emoji} TRADE OPENED{trade_ref}*\n"
             f"─────────────────────\n"
             f"*Pair:* {pair_display}\n"
             f"*Direction:* {direction}\n"
@@ -111,7 +113,8 @@ class TelegramNotifier:
         close_price: float,
         pl: float,
         reason: str,
-        account_balance: float
+        account_balance: float,
+        trade_number: int = None
     ):
         """Notification sent every time the bot closes a trade."""
 
@@ -119,9 +122,10 @@ class TelegramNotifier:
         is_profit = pl >= 0
         result_emoji = "✅" if is_profit else "❌"
         pl_sign = "+" if is_profit else ""
+        trade_ref = f" (Trade #{trade_number})" if trade_number else ""
 
         message = (
-            f"*{result_emoji} TRADE CLOSED*\n"
+            f"*{result_emoji} TRADE CLOSED{trade_ref}*\n"
             f"─────────────────────\n"
             f"*Pair:* {pair_display}\n"
             f"*Closed at:* {close_price}\n"

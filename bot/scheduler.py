@@ -377,7 +377,7 @@ def _evaluate_pair(pair: str, available_capital: float):
         trade_result["confidence_score"] = result.score
         trade_result["reasoning"] = result.reasoning
 
-        storage.save_trade(trade_result)
+        trade_number = storage.save_trade(trade_result)
 
         notifier.trade_opened(
             pair=pair,
@@ -388,7 +388,8 @@ def _evaluate_pair(pair: str, available_capital: float):
             take_profit=take_profit_price,
             confidence_score=result.score,
             breakdown=result.breakdown,
-            reasoning=result.reasoning
+            reasoning=result.reasoning,
+            trade_number=trade_number
         )
 
 
@@ -563,13 +564,16 @@ def force_close_all():
     if close_results:
         for result in close_results:
             balance = broker.get_account_balance()
+            # Look up the trade number from when this position was opened
+            trade_num = storage.get_trade_number(result.get("deal_id"))
             notifier.trade_closed(
                 pair=result.get("pair", "Unknown"),
                 direction="N/A",
                 close_price=result.get("close_price", 0),
                 pl=result.get("pl") or result.get("profit_loss", 0),
                 reason="End of day close",
-                account_balance=balance
+                account_balance=balance,
+                trade_number=trade_num
             )
 
 

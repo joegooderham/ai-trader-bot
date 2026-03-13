@@ -94,6 +94,17 @@ WEEKLY_ANALYSIS_TIME = _cfg["schedule"]["weekly_analysis_time"]
 MCP_CONFIG   = _cfg["mcp"]
 CLAUDE_MODEL = _cfg["mcp"]["claude_model"]
 
+# ── LSTM Model ──────────────────────────────────────────────────────────────
+
+_lstm_cfg = _cfg.get("lstm", {})
+LSTM_ENABLED                = _lstm_cfg.get("enabled", True)
+LSTM_RETRAIN_INTERVAL_MIN   = _lstm_cfg.get("retrain_interval_minutes", 240)
+LSTM_SHADOW_MODE            = _lstm_cfg.get("shadow_mode", True)
+LSTM_EPOCHS                 = _lstm_cfg.get("epochs", 50)
+LSTM_BATCH_SIZE             = _lstm_cfg.get("batch_size", 64)
+LSTM_LEARNING_RATE          = _lstm_cfg.get("learning_rate", 0.001)
+LSTM_PATIENCE               = _lstm_cfg.get("patience", 7)
+
 # ── Data Storage ─────────────────────────────────────────────────────────────
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data_store"))

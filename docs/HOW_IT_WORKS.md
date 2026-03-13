@@ -74,7 +74,7 @@ All the indicator signals and MCP context are combined into a single score: **0 
 Here's how the score is built:
 
 ```
-AI Model Prediction        →  up to 50 points
+LSTM Neural Network        →  up to 50 points
 MACD + RSI consensus       →  up to 20 points
 EMA trend alignment        →  up to 15 points
 Bollinger Band position    →  up to 10 points
@@ -162,15 +162,47 @@ Every Sunday evening, you get a bigger picture:
 
 ---
 
-## How the AI "Learns"
+## How the AI Learns — LSTM Neural Network
 
-The bot doesn't have memory between restarts, but it does get smarter over time in two ways:
+The bot has a real neural network (LSTM — Long Short-Term Memory) that learns from market data and contributes 50% of the confidence score.
 
-**1. Daily Learning Records**
-After every trading day, the MCP server records what market conditions were like and how trades performed. Over 30 days, this builds a rich dataset of what works and what doesn't.
+### What It Learns From
 
-**2. Weekly Claude Analysis**
-Every Sunday, Claude AI reviews the week's trading results alongside market context. It identifies patterns — "EUR/USD trades have been more profitable during London session" or "high-volatility periods have led to losses" — and factors these into the confidence scoring going forward.
+Every 15 minutes when the bot scans the market, it saves the candle data (open, high, low, close, volume) to a local SQLite database. This means the LSTM's training data grows continuously throughout the day with real market data from IG.
+
+On top of that, each training cycle tops up any gaps from Yahoo Finance (yfinance), so the database always has complete, up-to-date coverage.
+
+### How It Trains
+
+The LSTM retrains automatically on a rolling interval (default: every 4 hours, tuneable in `config.yaml`). Each cycle:
+
+1. Downloads any new candles since the last training run
+2. Transforms raw price data into 12 normalised features (indicators like RSI, MACD, Bollinger Bands, plus time-of-day encoding)
+3. Labels each candle: "did the price go up, down, or sideways in the next 3 hours?"
+4. Feeds 30-candle sequences into the neural network
+5. Trains until validation loss stops improving (early stopping)
+6. Hot-swaps the live model — no restart needed
+
+### Adaptive Data Window
+
+Training starts with 3 months of history. If the model's accuracy drops below 50%, it automatically extends the window by 2 weeks for every 10% below threshold, up to a maximum of 6 months. Beyond 6 months, older data tends to hurt more than help because market conditions change.
+
+### Shadow Mode
+
+When first deployed, the LSTM runs in "shadow mode" — it generates predictions and logs them alongside the indicator-only scores, but doesn't affect actual trades. This lets you compare:
+
+```
+EUR_USD SHADOW | LSTM: 72.3% BUY | Indicators: 58.1% BUY | Delta: +14.2pp
+```
+
+Once you're satisfied the LSTM is adding value, flip `shadow_mode: false` in `config.yaml` and it will drive real trade decisions.
+
+### Training Duration
+
+Each training cycle reports its exact duration in Telegram, so you can track whether training takes 90 seconds or 10 minutes on your hardware. The goal is to tighten the retrain interval towards real-time as you learn how fast it runs.
+
+**Weekly Claude Analysis**
+Every Sunday, Claude AI also reviews the week's trading results alongside market context. It identifies patterns — "EUR/USD trades have been more profitable during London session" or "high-volatility periods have led to losses" — and these are shared in the weekly Telegram report.
 
 ---
 

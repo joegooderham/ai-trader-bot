@@ -128,6 +128,40 @@ mcp:
   # Maximum tokens for Claude's analysis response
   max_analysis_tokens: 1000
 
+lstm:
+  # Whether the LSTM model is enabled for predictions
+  # Set to false to disable ML scoring and rely on indicators only
+  enabled: true
+
+  # ── Continuous Training ────────────────────────────────────────────────────
+  # The LSTM retrains automatically throughout the day on a rolling interval.
+  # Start conservative (240 min = 4 hours) and tighten as we learn how fast
+  # training runs on the hardware. The goal is to approach real-time retraining.
+  #
+  # Set retrain_interval_minutes to 0 to disable auto-retrain entirely.
+  retrain_interval_minutes: 240
+
+  # ── Shadow Mode ────────────────────────────────────────────────────────────
+  # When true, every scan logs LSTM-enhanced vs indicator-only confidence
+  # scores side by side, WITHOUT the LSTM score affecting actual trades.
+  # Use this to validate the model before letting it influence real decisions.
+  #
+  # Shadow mode flow:
+  #   1. Calculate confidence WITH LSTM prediction  → logged as "lstm_score"
+  #   2. Calculate confidence WITHOUT LSTM (None)   → logged as "indicator_score"
+  #   3. Only the indicator_score is used for trade decisions
+  #   4. Both scores are logged + sent to Telegram for comparison
+  #
+  # Once you're happy the LSTM is adding value, set shadow_mode to false
+  # and the LSTM score will drive real trade decisions (50% weight).
+  shadow_mode: true
+
+  # Training hyperparameters — tuned for forex H1 data
+  epochs: 50                    # Max training epochs (early stopping usually kicks in sooner)
+  batch_size: 64                # Samples per gradient update
+  learning_rate: 0.001          # Adam optimizer learning rate
+  patience: 7                   # Stop if val loss doesn't improve for this many epochs
+
 data:
   # Number of days of historical data to fetch on first startup
   initial_history_days: 30

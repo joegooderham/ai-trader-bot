@@ -37,6 +37,7 @@ from risk.eod_manager import EODManager
 from data.storage import TradeStorage
 from data.context_writer import ContextWriter
 from bot.instance import InstanceManager
+from bot.engine.lstm import LSTMPredictor
 import httpx
 
 # ── Setup logging ─────────────────────────────────────────────────────────────
@@ -55,6 +56,9 @@ context_writer = ContextWriter(broker=broker)
 instance_manager = InstanceManager(notifier=notifier)
 plan_generator = DailyPlanGenerator()
 chat_handler = TelegramChatHandler()
+
+# LSTM predictor — loads saved model at startup (gracefully returns None if no model yet)
+lstm_predictor = LSTMPredictor() if config.LSTM_ENABLED else None
 
 MCP_SERVER_URL = "http://mcp-server:8090"
 
@@ -119,15 +123,46 @@ def _evaluate_pair(pair: str, available_capital: float):
         logger.warning(f"Insufficient candle data for {pair}")
         return
 
+    # Persist live candles to SQLite so the LSTM trains on real broker data
+    # INSERT OR IGNORE handles duplicates, so this is safe to call every scan
+    try:
+        storage.save_candles(pair, config.TIMEFRAME, candles, source="ig_live")
+    except Exception as e:
+        logger.debug(f"Failed to save live candles for {pair}: {e}")
+
     ind = indicators.calculate(candles)
     mcp_context = _get_mcp_context(pair)
 
-    result = confidence.calculate_confidence(
-        pair=pair,
-        indicators=ind,
-        mcp_context=mcp_context,
-        ml_prediction=None
-    )
+    # Get LSTM prediction if model is loaded and enabled
+    ml_prediction = None
+    if lstm_predictor:
+        ml_prediction = lstm_predictor.predict(pair, candles)
+
+    if config.LSTM_SHADOW_MODE and ml_prediction:
+        # Shadow mode: score WITH and WITHOUT LSTM, log both, but only act on indicator-only
+        lstm_result = confidence.calculate_confidence(
+            pair=pair, indicators=ind, mcp_context=mcp_context, ml_prediction=ml_prediction
+        )
+        indicator_result = confidence.calculate_confidence(
+            pair=pair, indicators=ind, mcp_context=mcp_context, ml_prediction=None
+        )
+
+        # Log the comparison so we can see if LSTM is adding value
+        diff = lstm_result.score - indicator_result.score
+        diff_str = f"+{diff:.1f}" if diff >= 0 else f"{diff:.1f}"
+        logger.info(
+            f"{pair} SHADOW | LSTM: {lstm_result.score:.1f}% {lstm_result.direction} | "
+            f"Indicators: {indicator_result.score:.1f}% {indicator_result.direction} | "
+            f"Delta: {diff_str}pp | LSTM pred: {ml_prediction}"
+        )
+
+        # Use indicator-only result for actual trade decisions until shadow mode is off
+        result = indicator_result
+    else:
+        # Live mode: LSTM score drives real trade decisions (50% weight)
+        result = confidence.calculate_confidence(
+            pair=pair, indicators=ind, mcp_context=mcp_context, ml_prediction=ml_prediction
+        )
 
     logger.info(f"{pair}: {result.direction} | Confidence: {result.score:.1f}% | Trade: {result.should_trade}")
 
@@ -298,6 +333,68 @@ def send_weekly_report():
     )
 
 
+# Track whether a retrain is already running so we don't stack them up
+_retrain_lock = threading.Lock()
+_retrain_running = False
+
+
+def retrain_lstm():
+    """
+    Continuous LSTM retrain — runs on a rolling interval (default 4h).
+    Downloads latest data, trains fresh model, reloads predictor.
+    Runs in a background thread so it never blocks market scans.
+
+    Training duration is reported in Telegram so we can decide whether
+    to tighten the interval towards real-time retraining.
+    """
+    global _retrain_running
+
+    # Don't stack retrains — if one is already running, skip this cycle
+    if not _retrain_lock.acquire(blocking=False):
+        logger.info("LSTM retrain already in progress — skipping this cycle")
+        return
+
+    try:
+        _retrain_running = True
+        logger.info("═══ LSTM Retrain Started ═══")
+
+        from bot.engine.lstm.trainer import LSTMTrainer
+        trainer = LSTMTrainer()
+        metrics = trainer.train(
+            epochs=config.LSTM_EPOCHS,
+            batch_size=config.LSTM_BATCH_SIZE,
+            lr=config.LSTM_LEARNING_RATE,
+            patience=config.LSTM_PATIENCE,
+        )
+
+        if "error" in metrics:
+            logger.error(f"LSTM retrain failed: {metrics['error']}")
+            notifier._send(f"⚠️ *LSTM Retrain Failed*\n{metrics['error']}")
+            return
+
+        # Reload the predictor with the freshly trained model
+        if lstm_predictor:
+            lstm_predictor.reload()
+
+        duration = metrics.get("training_duration_human", "?")
+        notifier._send(
+            f"🧠 *LSTM Model Retrained* ({duration})\n"
+            f"Val accuracy: {metrics['val_accuracy']:.1%}\n"
+            f"Val loss: {metrics['best_val_loss']:.4f}\n"
+            f"Epochs: {metrics['epochs_trained']}\n"
+            f"Samples: {metrics['train_samples']} train, {metrics['val_samples']} val\n"
+            f"{'Extended data: ' + metrics['extended_period'] if metrics.get('data_extended') else ''}"
+        )
+        logger.info(f"═══ LSTM Retrain Complete — {duration}, val acc {metrics['val_accuracy']:.1%} ═══")
+
+    except Exception as e:
+        logger.error(f"LSTM retrain failed with exception: {e}")
+        notifier._send(f"⚠️ *LSTM Retrain Error*\n{e}")
+    finally:
+        _retrain_running = False
+        _retrain_lock.release()
+
+
 def _get_mcp_context(pair: str) -> dict:
     """Fetch market context from the MCP server. Returns empty dict on failure."""
     try:
@@ -375,6 +472,17 @@ def main():
         CronTrigger(hour=0, minute=10),
         id="daily_plan", name="Tomorrow's Trading Plan"
     )
+
+    # LSTM continuous retrain — runs on a rolling interval
+    # Starts at 4h (240 min), tighten as we learn training speed on this hardware
+    if config.LSTM_ENABLED and config.LSTM_RETRAIN_INTERVAL_MIN > 0:
+        scheduler.add_job(
+            retrain_lstm,
+            "interval",
+            minutes=config.LSTM_RETRAIN_INTERVAL_MIN,
+            id="lstm_retrain",
+            name=f"LSTM Retrain (every {config.LSTM_RETRAIN_INTERVAL_MIN}min)"
+        )
 
     logger.info("📅 Scheduler started with the following jobs:")
     for job in scheduler.get_jobs():

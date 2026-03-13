@@ -20,7 +20,10 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements first (Docker caches this layer — speeds up rebuilds)
 COPY requirements.txt .
 
-# Install all Python dependencies
+# Install PyTorch CPU-only first (saves ~1.5GB vs full CUDA build)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install all other Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the entire project into the container

@@ -13,6 +13,7 @@ ta==0.11.0                     # Technical indicators (RSI, MACD, Bollinger Band
 yfinance>=1.2.0                # Free historical Forex data from Yahoo Finance
 
 # Machine Learning
+torch>=2.2.0                   # LSTM model for trade direction prediction
 scikit-learn==1.3.2            # ML utilities (scaling, metrics)
 joblib==1.3.2                  # Model saving/loading
 

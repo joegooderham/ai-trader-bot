@@ -49,7 +49,8 @@ def calculate_confidence(
     pair: str,
     indicators: IndicatorResult,
     mcp_context: dict,
-    ml_prediction: Optional[dict] = None
+    ml_prediction: Optional[dict] = None,
+    mtf_context: Optional[dict] = None
 ) -> ConfidenceResult:
     """
     Calculate the overall confidence score for a potential trade.
@@ -215,11 +216,35 @@ def calculate_confidence(
     # ── Step 3: Apply MCP context modifiers ───────────────────────────────────
     mcp_modifier = _apply_mcp_context(pair, direction, mcp_context, reasoning_parts)
 
+    # ── Step 3b: Apply multi-timeframe modifier (BACKLOG-004) ──────────────
+    mtf_modifier = 0.0
+    if mtf_context and mtf_context.get("trend") != "neutral":
+        htf_trend = mtf_context["trend"]
+        htf_strength = mtf_context.get("strength", 0)
+        # Check if higher TF trend aligns with our entry signal
+        direction_matches = (
+            (direction == "BUY" and htf_trend == "bullish") or
+            (direction == "SELL" and htf_trend == "bearish")
+        )
+        if direction_matches:
+            mtf_modifier = config.HTF_ALIGNMENT_BONUS
+            reasoning_parts.append(
+                f"H4 trend is {htf_trend} (strength {htf_strength:.0f}%) — "
+                f"aligns with {direction}, +{config.HTF_ALIGNMENT_BONUS} boost"
+            )
+        else:
+            mtf_modifier = -config.HTF_CONFLICT_PENALTY
+            reasoning_parts.append(
+                f"⚠️ H4 trend is {htf_trend} (strength {htf_strength:.0f}%) — "
+                f"conflicts with {direction}, -{config.HTF_CONFLICT_PENALTY} penalty"
+            )
+
     # ── Step 4: Calculate final score ─────────────────────────────────────────
     raw_score = sum(breakdown.values())
-    final_score = min(max(raw_score + mcp_modifier, 0), 100)
+    final_score = min(max(raw_score + mcp_modifier + mtf_modifier, 0), 100)
 
     breakdown["mcp_modifier"] = round(mcp_modifier, 2)
+    breakdown["mtf_modifier"] = round(mtf_modifier, 2)
     breakdown["final"] = round(final_score, 2)
 
     # ── Step 5: Build the reasoning explanation ───────────────────────────────

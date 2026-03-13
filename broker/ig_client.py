@@ -260,6 +260,15 @@ class IGClient:
         r.raise_for_status()
         return r.json()
 
+    def _put(self, endpoint: str, payload: dict, version: str = "1") -> dict:
+        """HTTP PUT for updating existing resources (e.g. stop-loss on open positions)."""
+        url = f"{self.base_url}{endpoint}"
+        r = httpx.put(url, json=payload, headers=self._headers(version), timeout=15)
+        if r.status_code != 200:
+            logger.error(f"PUT {endpoint} failed {r.status_code}: {r.text}")
+        r.raise_for_status()
+        return r.json()
+
     def _delete(self, endpoint: str, payload: dict = None, version: str = "1") -> dict:
         """IG uses POST with _method=DELETE override for some endpoints."""
         url = f"{self.base_url}{endpoint}"
@@ -730,6 +739,43 @@ class IGClient:
                 logger.error(f"Failed to close position {deal_id} during EOD close")
 
         return results
+
+    def update_stop_loss(self, deal_id: str, new_stop: float, new_limit: float = None) -> bool:
+        """
+        Update the stop-loss (and optionally take-profit) on an open position.
+        Uses IG API v2 PUT /positions/otc/{dealId}.
+
+        Returns True if the update was accepted, False otherwise.
+        """
+        payload = {
+            "stopLevel": round(new_stop, 5),
+            "trailingStop": False,
+        }
+        if new_limit is not None:
+            payload["limitLevel"] = round(new_limit, 5)
+
+        try:
+            response = self._put(f"/positions/otc/{deal_id}", payload, version="2")
+            deal_ref = response.get("dealReference")
+            if not deal_ref:
+                logger.error(f"No deal reference from stop-loss update on {deal_id}")
+                return False
+
+            time.sleep(0.3)
+            confirmation = self._get(f"/confirms/{deal_ref}")
+            status = confirmation.get("dealStatus", "UNKNOWN")
+
+            if status == "ACCEPTED":
+                logger.info(f"✅ Stop-loss updated: {deal_id} → {new_stop:.5f}")
+                return True
+            else:
+                reason = confirmation.get("reason", "Unknown")
+                logger.error(f"Stop-loss update rejected for {deal_id}: {reason}")
+                return False
+
+        except Exception as e:
+            logger.error(f"update_stop_loss({deal_id}) failed: {e}")
+            return False
 
     # ── Open Positions ────────────────────────────────────────────────────────
 

@@ -34,6 +34,15 @@ trading:
   # Number of historical candles to analyse for each signal
   lookback_candles: 60
 
+  # ── Multi-Timeframe Analysis (BACKLOG-004) ────────────────────────────────
+  # The bot checks a higher timeframe for trend confirmation before trading.
+  # If the higher TF trend opposes the entry signal, confidence is reduced.
+  # If it aligns, confidence gets a boost. Set to "none" to disable.
+  htf_timeframe: H4             # Higher timeframe for trend backdrop
+  htf_lookback_candles: 60      # Candles to fetch on the higher timeframe
+  htf_alignment_bonus: 10       # Confidence boost when HTF aligns with signal
+  htf_conflict_penalty: 15      # Confidence penalty when HTF opposes signal
+
 confidence:
   # ── Aggressiveness vs Risk Factor — what's the difference? ───────────────
   #
@@ -87,6 +96,19 @@ risk:
   # If the account loses this % in a single day, pause trading for 24 hours
   # This prevents a bad day from becoming a catastrophe
   daily_loss_circuit_breaker_pct: 10.0
+
+  # ── Trailing Stop-Loss (BACKLOG-007) ──────────────────────────────────────
+  # Once a position reaches activation_atr_multiple × ATR in profit,
+  # the stop-loss trails behind the price at trail_atr_multiple × ATR.
+  # This locks in profit while letting winners run.
+  trailing_stop_activation_atr: 1.5   # Activate trailing stop after 1.5×ATR profit
+  trailing_stop_trail_atr: 1.0        # Trail distance: 1.0×ATR behind current price
+
+  # ── Correlation Block (BACKLOG-005) ─────────────────────────────────────
+  # If we already hold a position in a highly correlated pair, block the new trade.
+  # This prevents doubling up on effectively the same bet (e.g. long EUR_USD + long GBP_USD).
+  # Threshold: absolute correlation >= this value triggers the block.
+  correlation_block_threshold: 0.75
 
   # When holding overnight, tighten stop-loss to protect this % of profit
   overnight_profit_protection_pct: 75.0

@@ -101,3 +101,66 @@ def calculate(df: pd.DataFrame) -> IndicatorResult:
     )
 
     return result
+
+
+def calculate_trend_summary(df: pd.DataFrame) -> dict:
+    """
+    Lightweight trend summary for higher-timeframe confirmation (BACKLOG-004).
+
+    Returns a dict with:
+      - trend: "bullish", "bearish", or "neutral"
+      - strength: 0-100 score indicating how strong the trend is
+      - ema_20/ema_50: raw EMA values for reference
+
+    Designed to run on H4 candles to give a macro-trend backdrop for M15/H1 entries.
+    Needs only 50 candles minimum (less strict than full calculate()).
+    """
+    if len(df) < 50:
+        return {"trend": "neutral", "strength": 0, "ema_20": 0, "ema_50": 0}
+
+    ema_20 = float(ta.trend.EMAIndicator(df["close"], window=20).ema_indicator().iloc[-1])
+    ema_50 = float(ta.trend.EMAIndicator(df["close"], window=50).ema_indicator().iloc[-1])
+    rsi = float(ta.momentum.RSIIndicator(df["close"], window=14).rsi().iloc[-1])
+
+    # MACD on higher timeframe for trend strength
+    macd_obj = ta.trend.MACD(df["close"], window_fast=12, window_slow=26, window_sign=9)
+    histogram = float(macd_obj.macd_diff().iloc[-1])
+
+    ema_diff_pct = abs(ema_20 - ema_50) / ema_50 * 100
+
+    # Tally trend signals
+    bullish = 0
+    bearish = 0
+
+    if ema_20 > ema_50:
+        bullish += 1
+    elif ema_20 < ema_50:
+        bearish += 1
+
+    if histogram > 0:
+        bullish += 1
+    elif histogram < 0:
+        bearish += 1
+
+    if rsi > 55:
+        bullish += 1
+    elif rsi < 45:
+        bearish += 1
+
+    if bullish >= 2:
+        trend = "bullish"
+        # Strength based on EMA separation and signal agreement
+        strength = min(bullish * 30 + ema_diff_pct * 10, 100)
+    elif bearish >= 2:
+        trend = "bearish"
+        strength = min(bearish * 30 + ema_diff_pct * 10, 100)
+    else:
+        trend = "neutral"
+        strength = 0
+
+    return {
+        "trend": trend,
+        "strength": round(strength, 1),
+        "ema_20": round(ema_20, 5),
+        "ema_50": round(ema_50, 5),
+    }

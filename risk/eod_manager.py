@@ -50,10 +50,10 @@ class EODManager:
         self._held_overnight.clear()
 
         for trade in open_trades:
-            trade_id = trade.get("id")
-            pair = trade.get("instrument")
+            trade_id = trade.get("dealId")
+            pair = trade.get("pair") or trade.get("instrument")
             unrealised_pl = float(trade.get("unrealizedPL", 0))
-            direction = "BUY" if int(trade.get("currentUnits", 0)) > 0 else "SELL"
+            direction = trade.get("direction", "BUY")
 
             # Re-score this position fresh
             overnight_score = self._calculate_overnight_score(trade)
@@ -93,14 +93,17 @@ class EODManager:
         results = []
 
         for trade in open_trades:
-            trade_id = trade.get("id")
-            pair = trade.get("instrument")
+            trade_id = trade.get("dealId")
+            pair = trade.get("pair") or trade.get("instrument")
+            size = float(trade.get("dealSize", 0))
+            direction = trade.get("direction", "BUY")
 
             if trade_id in self._held_overnight:
                 logger.info(f"Skipping {pair} (trade {trade_id}) — approved for overnight hold")
                 continue
 
-            result = self.broker.close_trade(trade_id, reason="End of day close")
+            # close_trade() requires (deal_id, size, direction) — not a reason keyword
+            result = self.broker.close_trade(trade_id, size, direction)
             if result:
                 result["pair"] = pair
                 results.append(result)
@@ -122,7 +125,7 @@ class EODManager:
         try:
             from bot.engine import indicators, confidence
 
-            pair = trade.get("instrument")
+            pair = trade.get("pair") or trade.get("instrument")
 
             # Fetch fresh price data
             candles = self.broker.get_candles(pair, count=200)
@@ -132,9 +135,8 @@ class EODManager:
             # Calculate fresh indicators
             ind = indicators.calculate(candles)
 
-            # Simple overnight confidence — does the trend still support this trade?
-            units = int(trade.get("currentUnits", 0))
-            direction = "BUY" if units > 0 else "SELL"
+            # Direction is stored directly in the trade dict from IG API
+            direction = trade.get("direction", "BUY")
 
             # Get LSTM prediction if available
             ml_prediction = None
@@ -179,14 +181,17 @@ class EODManager:
         the new stop-loss is set to lock in at least £15 profit.
         """
         try:
-            trade_id = trade.get("id")
-            pair = trade.get("instrument")
-            open_price = float(trade.get("price", 0))
-            units = int(trade.get("currentUnits", 0))
-            direction = "BUY" if units > 0 else "SELL"
+            trade_id = trade.get("dealId")
+            pair = trade.get("pair") or trade.get("instrument")
+            open_price = float(trade.get("level") or trade.get("price", 0))
+            direction = trade.get("direction", "BUY")
 
-            current_price = self.broker.get_price(pair)
-            price = current_price["bid"] if direction == "BUY" else current_price["ask"]
+            # get_price() returns a float (mid price), not a dict
+            # For overnight protection this is close enough — the spread is tiny on majors
+            price = self.broker.get_price(pair)
+            if price is None:
+                logger.warning(f"Cannot tighten stop — no price available for {pair}")
+                return
 
             # Calculate price distance that represents the profit we want to protect
             protection_pct = config.OVERNIGHT_PROFIT_PROTECTION_PCT / 100

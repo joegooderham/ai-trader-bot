@@ -32,11 +32,15 @@ trading:
 
   # Maximum number of positions open at the same time
   # Keeping this low reduces overall risk exposure
-  max_open_positions: 5
+  max_open_positions: 25
 
   # Risk per trade as a percentage of your total capital
   # Example: 2% of £500 = £10 maximum loss per trade
   per_trade_risk_pct: 2.0
+
+  # Hard cap on maximum loss per trade in GBP
+  # Overrides per_trade_risk_pct if the percentage calculation would exceed this amount
+  max_per_trade_spend: 5.0
 
   # Candlestick timeframe for analysis
   # Options: M5 (5min), M15 (15min), H1 (1hour), H4 (4hour)

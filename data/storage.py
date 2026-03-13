@@ -125,10 +125,11 @@ class TradeStorage:
         # Migrate any existing JSON data into SQLite on first run
         self._migrate_json_if_needed()
 
-    def save_trade(self, trade: dict):
+    def save_trade(self, trade: dict) -> int:
         """
         Save a new trade to the database.
         Called whenever a trade is opened or closed.
+        Returns the auto-incremented trade number (id) for use in notifications.
         """
         conn = _get_connection()
         try:
@@ -137,7 +138,7 @@ class TradeStorage:
             if isinstance(breakdown, dict):
                 breakdown = json.dumps(breakdown)
 
-            conn.execute("""
+            cursor = conn.execute("""
                 INSERT OR REPLACE INTO trades
                 (trade_id, pair, direction, size, fill_price, close_price,
                  stop_loss, take_profit, pl, confidence_score, reasoning,
@@ -165,7 +166,9 @@ class TradeStorage:
                 breakdown,
             ))
             conn.commit()
-            logger.debug(f"Trade saved: {trade.get('pair')} {trade.get('direction')}")
+            trade_number = cursor.lastrowid
+            logger.debug(f"Trade #{trade_number} saved: {trade.get('pair')} {trade.get('direction')}")
+            return trade_number
         finally:
             conn.close()
 
@@ -189,6 +192,18 @@ class TradeStorage:
                     values
                 )
                 conn.commit()
+        finally:
+            conn.close()
+
+    def get_trade_number(self, deal_id: str) -> int:
+        """Look up the auto-incremented trade number for a deal_id."""
+        conn = _get_connection()
+        try:
+            row = conn.execute(
+                "SELECT id FROM trades WHERE deal_id = ? OR trade_id = ?",
+                (deal_id, deal_id)
+            ).fetchone()
+            return row[0] if row else None
         finally:
             conn.close()
 

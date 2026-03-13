@@ -86,6 +86,45 @@ CORRELATION_MATRIX = {
 }
 
 
+def _get_current_session() -> str:
+    """Determine which trading session is currently active (UTC)."""
+    hour = datetime.now(timezone.utc).hour
+    if 13 <= hour < 17:
+        return "overlap"
+    elif 8 <= hour < 17:
+        return "london"
+    elif 13 <= hour < 22:
+        return "new_york"
+    elif 0 <= hour < 9:
+        return "tokyo"
+    else:
+        return "sydney"
+
+
+def _get_session_min_confidence(pair: str) -> float:
+    """
+    Get the effective minimum confidence for the current session (BACKLOG-006).
+
+    During quiet sessions (Sydney, Tokyo), the threshold is raised to filter out
+    weak signals that are unreliable in low-volume conditions.
+    JPY pairs are exempt from the Tokyo penalty since they're most active then.
+    """
+    session = _get_current_session()
+    boost = config.SESSION_CONFIDENCE_BOOST.get(session, 0)
+
+    # JPY pairs are exempt from the Tokyo session penalty
+    if session == "tokyo" and config.SESSION_JPY_EXEMPT and "JPY" in pair:
+        boost = 0
+
+    effective_min = config.MIN_CONFIDENCE_SCORE + boost
+    if boost != 0:
+        logger.debug(
+            f"{pair} session adjustment: {session} session, "
+            f"min confidence {config.MIN_CONFIDENCE_SCORE}% + {boost:+d} = {effective_min}%"
+        )
+    return effective_min
+
+
 def _get_correlation(pair_a: str, pair_b: str) -> float:
     """Look up correlation between two pairs. Returns 0 if unknown."""
     return (
@@ -178,7 +217,7 @@ def scan_markets():
         logger.warning("Circuit breaker active — skipping market scan")
         return
 
-    logger.info("─── Market Scan Started ───")
+    logger.info(f"─── Market Scan Started ({_get_current_session().upper()} session) ───")
 
     balance = broker.get_account_balance()
     deployed_capital = broker.get_open_positions_value()
@@ -291,9 +330,18 @@ def _evaluate_pair(pair: str, available_capital: float):
             ml_prediction=ml_prediction, mtf_context=mtf_context
         )
 
-    logger.info(f"{pair}: {result.direction} | Confidence: {result.score:.1f}% | Trade: {result.should_trade}")
+    # BACKLOG-006: Apply session-aware minimum confidence
+    # During quiet sessions the bar is raised, during peak sessions it can be lowered
+    session_min = _get_session_min_confidence(pair)
+    session_trade = result.score >= session_min
+    session = _get_current_session()
 
-    if not result.should_trade:
+    logger.info(
+        f"{pair}: {result.direction} | Confidence: {result.score:.1f}% | "
+        f"Session: {session} (min: {session_min:.0f}%) | Trade: {session_trade}"
+    )
+
+    if not session_trade:
         return
 
     size, stop_loss_price, take_profit_price = calculate_position_size(

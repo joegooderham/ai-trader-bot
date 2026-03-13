@@ -541,13 +541,21 @@ def _update_trailing_stop(trade: dict):
     )
     success = broker.update_stop_loss(deal_id, new_stop)
     if success:
-        notifier._send(
-            f"📈 *Trailing Stop Updated*\n"
-            f"Pair: {pair} ({direction})\n"
-            f"Entry: {entry_price:.5f}\n"
-            f"Price: {current_price:.5f} (+{price_move:.5f})\n"
-            f"New stop: {new_stop:.5f}"
-        )
+        # Only send Telegram for significant stop moves (>= 10 pips) to avoid spam.
+        # Small trailing adjustments happen every 5 minutes and would flood notifications.
+        from risk.position_sizer import PIP_SIZE, DEFAULT_PIP_SIZE
+        pip_size = PIP_SIZE.get(pair, DEFAULT_PIP_SIZE)
+        old_stop_f = float(current_stop) if current_stop else 0
+        stop_move_pips = abs(new_stop - old_stop_f) / pip_size if pip_size > 0 else 0
+
+        if stop_move_pips >= 10:
+            notifier._send(
+                f"📈 *Trailing Stop Updated*\n"
+                f"Pair: {pair} ({direction})\n"
+                f"Entry: {entry_price:.5f}\n"
+                f"Price: {current_price:.5f} (+{price_move:.5f})\n"
+                f"New stop: {new_stop:.5f}"
+            )
 
 
 def eod_evaluation():

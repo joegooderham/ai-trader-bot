@@ -150,8 +150,8 @@ Use it to ask questions and get deep analysis about trading activity."""
             direction = t.get("direction", "?")
             pl = t.get("pl", None)
             score = t.get("confidence_score", "?")
-            reasoning = t.get("reasoning", "No reasoning recorded")
-            time_str = t.get("opened_at", "")[:16].replace("T", " ")
+            reasoning = t.get("reasoning") or "No reasoning recorded"
+            time_str = (t.get("opened_at") or "")[:16].replace("T", " ")
 
             pl_str = f"P&L: {'+'if pl and pl >= 0 else ''}£{pl:.2f}" if pl is not None else "Still open"
             lines.append(f"- [{time_str}] **{pair}** {direction} | Score: {score}% | {pl_str}")
@@ -236,8 +236,8 @@ Use it to ask questions and get deep analysis about trading activity."""
             direction = t.get("direction", "?")
             pl = t.get("pl", None)
             score = t.get("confidence_score", "?")
-            reasoning = t.get("reasoning", "No reasoning recorded")
-            opened = t.get("opened_at", "")[:16].replace("T", " ") + " UTC"
+            reasoning = t.get("reasoning") or "No reasoning recorded"
+            opened = (t.get("opened_at") or "")[:16].replace("T", " ") + " UTC"
             entry = t.get("fill_price", t.get("open_price", "?"))
             sl = t.get("stop_loss", "?")
             tp = t.get("take_profit", "?")
@@ -247,7 +247,7 @@ Use it to ask questions and get deep analysis about trading activity."""
             lines.append(f"\n**{pair} {direction}** | {opened}")
             lines.append(f"- Entry: {entry} | SL: {sl} | TP: {tp}")
             lines.append(f"- Confidence: {score}% | {pl_str}")
-            lines.append(f"- *Reasoning: {reasoning[:300]}*")
+            lines.append(f"- *Reasoning: {(reasoning or 'No reasoning')[:300]}*")
 
         return "\n".join(lines)
 

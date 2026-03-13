@@ -29,18 +29,30 @@ class TelegramNotifier:
     """Sends formatted messages to your Telegram account."""
 
     def __init__(self):
-        self.bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+        self.token = config.TELEGRAM_BOT_TOKEN
         self.chat_id = config.TELEGRAM_CHAT_ID
+        # Timestamp of last send — used to rate-limit and avoid pool exhaustion
+        self._last_send_time = 0.0
 
     def _send(self, message: str):
         """Send a message (sync wrapper around async Telegram library).
-        Works from any thread — uses a dedicated event loop to avoid
-        destroying the main thread's loop (which run_polling needs)."""
+        Creates a fresh Bot + event loop per call so the httpx connection pool
+        is properly scoped and cleaned up. Rate-limited to 1 message/second
+        to avoid Telegram API throttling and pool exhaustion."""
+        import time
         try:
+            # Rate limit: wait if we sent a message less than 1 second ago
+            now = time.monotonic()
+            elapsed = now - self._last_send_time
+            if elapsed < 1.0:
+                time.sleep(1.0 - elapsed)
+
             loop = asyncio.new_event_loop()
             try:
+                # Fresh Bot per call — avoids stale connection pool from closed loops
+                bot = Bot(token=self.token)
                 loop.run_until_complete(
-                    self.bot.send_message(
+                    bot.send_message(
                         chat_id=self.chat_id,
                         text=message,
                         parse_mode=ParseMode.MARKDOWN
@@ -48,6 +60,7 @@ class TelegramNotifier:
                 )
             finally:
                 loop.close()
+            self._last_send_time = time.monotonic()
             logger.debug(f"Telegram message sent: {message[:60]}...")
         except Exception as e:
             logger.error(f"Failed to send Telegram message: {e}")

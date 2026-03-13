@@ -72,6 +72,7 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("query", self.cmd_query))
         self.app.add_handler(CommandHandler("devops", self.cmd_devops))
         self.app.add_handler(CommandHandler("backtest", self.cmd_backtest))
+        self.app.add_handler(CommandHandler("trades", self.cmd_trades))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
 
         return self.app
@@ -88,6 +89,7 @@ class TelegramChatHandler:
             "*/positions* — Currently open positions\n"
             "*/health* — System health status\n"
             "*/plan* — Tomorrow's trading plan\n"
+            "*/trades* — Recent trades with index numbers\n"
             "*/stats* — All-time performance stats\n"
             "*/fallbacktest* — Test yfinance backup data source\n"
             "*/query* `<question>` — Query trade database in plain English\n"
@@ -320,6 +322,70 @@ class TelegramChatHandler:
         except Exception as e:
             logger.error(f"Devops command failed: {e}")
             await update.message.reply_text(f"⚠️ Could not fetch git log: {str(e)[:200]}")
+
+    async def cmd_trades(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List recent trades with their index numbers for reference."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH), timeout=10)
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute(
+                    "SELECT id, pair, direction, status, pl, confidence_score, opened_at "
+                    "FROM trades ORDER BY id DESC LIMIT 20"
+                ).fetchall()
+            finally:
+                conn.close()
+
+            if not rows:
+                await update.message.reply_text("No trades recorded yet.")
+                return
+
+            message = (
+                "*📋 TRADE LOG*\n"
+                "─────────────────────\n"
+            )
+
+            for r in rows:
+                pair = (r["pair"] or "").replace("_", "/")
+                direction = r["direction"] or "?"
+                status = r["status"] or "?"
+                pl = r["pl"]
+                score = r["confidence_score"]
+                opened = r["opened_at"] or ""
+
+                # Format P&L
+                if pl is not None:
+                    pl_str = f"{'+'if pl >= 0 else ''}£{pl:.2f}"
+                    result_emoji = "✅" if pl >= 0 else "❌"
+                else:
+                    pl_str = "open"
+                    result_emoji = "⏳"
+
+                # Short date
+                date_str = opened[:16].replace("T", " ") if opened else ""
+
+                message += (
+                    f"{result_emoji} *#{r['id']}* {pair} {direction} | "
+                    f"{pl_str} | {score:.0f}% | {date_str}\n"
+                )
+
+            message += (
+                f"\n_Showing last {len(rows)} trades_\n"
+                f"_Use /query for detailed lookups_\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            )
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Trades command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch trades: {str(e)[:200]}")
 
     async def cmd_backtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Run LSTM backtest against historical data and report results."""

@@ -5,6 +5,7 @@
 
 # Broker API
 httpx==0.25.2                  # IG Group API client (async HTTP)
+lightstreamer-client-lib>=1.0.0  # IG Lightstreamer streaming for real-time position updates
 
 # Data & Analysis
 pandas==2.1.4                  # Data manipulation and analysis

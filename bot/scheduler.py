@@ -38,6 +38,7 @@ from data.storage import TradeStorage
 from data.context_writer import ContextWriter
 from bot.instance import InstanceManager
 from bot.engine.lstm import LSTMPredictor
+from broker.ig_streaming import IGStreamingClient
 import httpx
 
 # ── Setup logging ─────────────────────────────────────────────────────────────
@@ -59,6 +60,12 @@ chat_handler = TelegramChatHandler()
 
 # LSTM predictor — loads saved model at startup (gracefully returns None if no model yet)
 lstm_predictor = LSTMPredictor() if config.LSTM_ENABLED else None
+
+# Real-time position streaming via IG Lightstreamer (BACKLOG-004 / GH#6)
+streaming_client = IGStreamingClient(broker)
+
+# Track last reported P&L per position to only alert on significant changes
+_last_reported_pl: dict = {}
 
 MCP_SERVER_URL = "http://mcp-server:8090"
 
@@ -385,10 +392,70 @@ def _evaluate_pair(pair: str, available_capital: float):
         )
 
 
+def _on_streaming_position_update(position: dict):
+    """
+    Callback fired by Lightstreamer when an open position changes in real-time.
+
+    This replaces the 5-minute polling for position P&L monitoring.
+    Only sends Telegram alerts when the P&L change exceeds the threshold
+    to avoid spamming on every tiny price tick.
+    """
+    global _last_reported_pl
+
+    deal_id = position.get("dealId")
+    pair = position.get("pair", "")
+    upl = position.get("unrealizedPL")
+    status = position.get("status")
+
+    if not deal_id:
+        return
+
+    # If the position was closed (status = DELETED), notify and clean up
+    if status == "DELETED":
+        logger.info(f"Position closed via streaming: {pair} (deal {deal_id})")
+        _last_reported_pl.pop(deal_id, None)
+        return
+
+    # Check if P&L has changed significantly since last alert
+    if upl is not None:
+        last_pl = _last_reported_pl.get(deal_id, 0)
+        pl_change = abs(upl - last_pl)
+
+        if pl_change >= config.STREAMING_PL_ALERT_THRESHOLD:
+            direction = position.get("direction", "")
+            emoji = "📈" if upl > last_pl else "📉"
+            logger.info(
+                f"Streaming: {pair} {direction} | P&L: £{upl:.2f} "
+                f"(change: £{upl - last_pl:+.2f})"
+            )
+            _last_reported_pl[deal_id] = upl
+
+    # Also apply trailing stop logic on every streaming update
+    # This makes trailing stops react in real-time instead of every 5 min
+    _update_trailing_stop(position)
+
+
+def _on_streaming_confirmation(confirmation: dict):
+    """Callback fired by Lightstreamer when a trade is confirmed."""
+    status = confirmation.get("dealStatus")
+    epic = confirmation.get("epic", "")
+    direction = confirmation.get("direction", "")
+    level = confirmation.get("level")
+
+    if status == "ACCEPTED":
+        logger.info(f"Streaming confirmation: {epic} {direction} @ {level}")
+    elif status == "REJECTED":
+        reason = confirmation.get("reason", "Unknown")
+        logger.warning(f"Streaming rejection: {epic} {direction} — {reason}")
+
+
 def monitor_positions():
     """
-    Monitor all open positions every 5 minutes.
-    Applies trailing stop-loss when a position has moved far enough in profit.
+    Monitor all open positions every 5 minutes via REST polling.
+
+    This is the fallback for when Lightstreamer streaming is unavailable.
+    When streaming IS active, this still runs as a safety net to catch
+    any updates that might have been missed and to apply trailing stops.
     """
     open_trades = broker.get_open_trades()
     if not open_trades:
@@ -751,6 +818,20 @@ def main():
         logger.info(f"   - {job.name}")
 
     scheduler.start()
+
+    # Start real-time position streaming if enabled (BACKLOG-004 / GH#6)
+    # Falls back to 5-minute REST polling if Lightstreamer fails to connect
+    if config.ENABLE_STREAMING and streaming_client.is_available:
+        streaming_ok = streaming_client.start(
+            on_position_update=_on_streaming_position_update,
+            on_confirmation=_on_streaming_confirmation,
+        )
+        if streaming_ok:
+            logger.info("📡 Real-time position streaming active via Lightstreamer")
+        else:
+            logger.warning("📡 Streaming failed to start — using 5-min REST polling fallback")
+    else:
+        logger.info("📡 Streaming disabled — using 5-min REST polling for positions")
 
     # Run initial market scan in a background thread so it doesn't
     # block the Telegram polling loop from starting

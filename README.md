@@ -238,12 +238,17 @@ Training starts with 3 months of data. If validation accuracy falls below 50%, t
 
 When `shadow_mode: true` in config.yaml (default), every scan logs LSTM-enhanced vs indicator-only scores side by side **without the LSTM affecting actual trades**. This lets you validate the model before letting it drive real decisions. Set `shadow_mode: false` once you're confident the LSTM is adding value.
 
-### Manual Training
+### Manual Training & Backtesting
 
 ```bash
 # Trigger a training run inside Docker
 docker exec ai-trader-bot python -m bot.engine.lstm.trainer
+
+# Run backtest — compares LSTM vs indicator-only on historical data
+docker exec ai-trader-bot python -m bot.engine.lstm.backtest
 ```
+
+Or use `/backtest` in Telegram to run the simulation and get results in chat.
 
 ---
 
@@ -260,6 +265,7 @@ Send these to your bot in Telegram:
 | `/stats` | All-time performance stats |
 | `/query <question>` | Query trade database in plain English |
 | `/devops` | Today's code changes (git log) |
+| `/backtest` | Run LSTM vs indicator-only simulation on historical data |
 | `/fallbacktest` | Test yfinance backup data source |
 | `/help` | Show all commands |
 

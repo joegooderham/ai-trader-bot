@@ -71,6 +71,7 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("fallbacktest", self.cmd_fallback_test))
         self.app.add_handler(CommandHandler("query", self.cmd_query))
         self.app.add_handler(CommandHandler("devops", self.cmd_devops))
+        self.app.add_handler(CommandHandler("backtest", self.cmd_backtest))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
 
         return self.app
@@ -90,7 +91,8 @@ class TelegramChatHandler:
             "*/stats* — All-time performance stats\n"
             "*/fallbacktest* — Test yfinance backup data source\n"
             "*/query* `<question>` — Query trade database in plain English\n"
-            "*/devops* — Today's code changes (git log)\n\n"
+            "*/devops* — Today's code changes (git log)\n"
+            "*/backtest* — Run LSTM vs indicator-only simulation\n\n"
             "*Or just ask naturally, for example:*\n"
             "_\"How did EUR/USD perform this week?\"_\n"
             "_\"Why did the bot make that last trade?\"_\n"
@@ -318,6 +320,33 @@ class TelegramChatHandler:
         except Exception as e:
             logger.error(f"Devops command failed: {e}")
             await update.message.reply_text(f"⚠️ Could not fetch git log: {str(e)[:200]}")
+
+    async def cmd_backtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Run LSTM backtest against historical data and report results."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await update.message.reply_text("Running backtest — this may take a minute...")
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            import time as _time
+            start = _time.time()
+
+            from bot.engine.lstm.backtest import BacktestEngine
+            engine = BacktestEngine()
+            results = engine.run_all_pairs()
+            report = engine.format_report(results)
+
+            duration = _time.time() - start
+            report += f"\n\nCompleted in {duration:.1f}s"
+
+            await update.message.reply_text(report, parse_mode=None)
+
+        except Exception as e:
+            logger.error(f"Backtest command failed: {e}")
+            await update.message.reply_text(f"Backtest failed: {str(e)[:300]}")
 
     # ── Main Question Handler ─────────────────────────────────────────────────
 

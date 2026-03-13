@@ -190,6 +190,11 @@ def _evaluate_pair(pair: str, available_capital: float):
     )
 
     if trade_result:
+        # Enrich trade_result with confidence data before persisting
+        # These fields aren't available inside ig_client, so we add them here
+        trade_result["confidence_score"] = result.score
+        trade_result["reasoning"] = result.reasoning
+
         storage.save_trade(trade_result)
 
         notifier.trade_opened(
@@ -236,7 +241,7 @@ def force_close_all():
                 pair=result.get("pair", "Unknown"),
                 direction="N/A",
                 close_price=result.get("close_price", 0),
-                pl=result.get("pl", 0),
+                pl=result.get("pl") or result.get("profit_loss", 0),
                 reason="End of day close",
                 account_balance=balance
             )

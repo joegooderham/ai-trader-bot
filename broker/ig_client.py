@@ -612,11 +612,12 @@ class IGClient:
             "currencyCode":   currency_code,
         }
 
-        # SL/TP temporarily disabled for bare order test
-        # if stop_loss:
-        #     payload["stopLevel"] = round(stop_loss, 5)
-        # if take_profit:
-        #     payload["limitLevel"] = round(take_profit, 5)
+        # Stop-loss and take-profit levels — essential for risk management
+        # These are set on IG's servers, so even if the bot crashes, positions are protected
+        if stop_loss:
+            payload["stopLevel"] = round(stop_loss, 5)
+        if take_profit:
+            payload["limitLevel"] = round(take_profit, 5)
 
         logger.info(f"Submitting order: {pair} {direction} size={size} | payload={payload}")
 
@@ -693,6 +694,7 @@ class IGClient:
                     "deal_id":        deal_id,
                     "close_price":    float(confirmation.get("level", 0)),
                     "profit_loss":    pl,
+                    "pl":             pl,  # Alias for consumers expecting "pl" key
                     "status":         "ACCEPTED",
                     "closed_at":      datetime.now(timezone.utc).isoformat(),
                 }
@@ -759,11 +761,20 @@ class IGClient:
                 current_price = market.get("bid") if direction == "BUY" else market.get("offer")
                 current_price = current_price or level
 
-                # P&L = (current - entry) * size * contractSize for BUY, inverted for SELL
+                # P&L calculated using pip-based approach to avoid JPY inflation bug
+                # price_diff / pip_size = number of pips moved
+                # pips * pip_value_gbp * size = P&L in GBP
+                from risk.position_sizer import PIP_SIZE, DEFAULT_PIP_SIZE, IG_PIP_VALUE_GBP
+                pip_size = PIP_SIZE.get(pair, DEFAULT_PIP_SIZE)
+                pip_value = IG_PIP_VALUE_GBP.get(pair, 0.80)
+
                 if direction == "BUY":
-                    upl = (current_price - level) * size * contract
+                    price_diff = current_price - level
                 else:
-                    upl = (level - current_price) * size * contract
+                    price_diff = level - current_price
+
+                pips_moved = price_diff / pip_size
+                upl = pips_moved * pip_value * size
 
                 result.append({
                     "dealId":       position.get("dealId"),

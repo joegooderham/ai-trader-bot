@@ -15,6 +15,17 @@ trading:
     - AUD_USD    # Australian Dollar / US Dollar
     - USD_CAD    # US Dollar / Canadian Dollar
 
+  # ── Real-Time Position Monitoring (BACKLOG-004/GH#6) ───────────────────────
+  # When enabled, the bot streams position updates via IG Lightstreamer instead
+  # of polling /positions every 5 minutes. This gives sub-second visibility into
+  # P&L changes, stop-loss triggers, and trailing stop adjustments.
+  # Falls back to REST polling if Lightstreamer connection fails.
+  enable_streaming: true
+
+  # P&L change threshold (in GBP) to trigger a Telegram alert
+  # Prevents spamming on tiny fluctuations — only notifies on significant moves
+  streaming_pl_alert_threshold: 5.0
+
   # How often to scan the market for new trade signals (in minutes)
   # Lower = more frequent checks but higher API usage
   scan_interval_minutes: 15

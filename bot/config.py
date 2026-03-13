@@ -67,6 +67,10 @@ MAX_OPEN_POSITIONS   = _cfg["trading"]["max_open_positions"]
 PER_TRADE_RISK_PCT   = _cfg["trading"]["per_trade_risk_pct"]
 TIMEFRAME            = _cfg["trading"]["timeframe"]
 LOOKBACK_CANDLES     = _cfg["trading"]["lookback_candles"]
+HTF_TIMEFRAME        = _cfg["trading"].get("htf_timeframe", "H4")
+HTF_LOOKBACK_CANDLES = _cfg["trading"].get("htf_lookback_candles", 60)
+HTF_ALIGNMENT_BONUS  = _cfg["trading"].get("htf_alignment_bonus", 10)
+HTF_CONFLICT_PENALTY = _cfg["trading"].get("htf_conflict_penalty", 15)
 
 # ── Confidence Score Weights ──────────────────────────────────────────────────
 
@@ -77,6 +81,9 @@ CONFIDENCE_WEIGHTS = _cfg["confidence"]["weights"]
 STOP_LOSS_ATR_MULTIPLIER         = _cfg["risk"]["stop_loss_atr_multiplier"]
 TAKE_PROFIT_RATIO                = _cfg["risk"]["take_profit_ratio"]
 DAILY_LOSS_CIRCUIT_BREAKER_PCT   = _cfg["risk"]["daily_loss_circuit_breaker_pct"]
+TRAILING_STOP_ACTIVATION_ATR     = _cfg["risk"].get("trailing_stop_activation_atr", 1.5)
+TRAILING_STOP_TRAIL_ATR          = _cfg["risk"].get("trailing_stop_trail_atr", 1.0)
+CORRELATION_BLOCK_THRESHOLD      = _cfg["risk"].get("correlation_block_threshold", 0.75)
 OVERNIGHT_PROFIT_PROTECTION_PCT  = _cfg["risk"]["overnight_profit_protection_pct"]
 
 # ── Schedule ──────────────────────────────────────────────────────────────────

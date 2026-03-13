@@ -24,7 +24,7 @@ import threading
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from bot import config
 from bot.engine import indicators, confidence
@@ -62,6 +62,98 @@ lstm_predictor = LSTMPredictor() if config.LSTM_ENABLED else None
 
 MCP_SERVER_URL = "http://mcp-server:8090"
 
+# ── Static Correlation Matrix (BACKLOG-005) ──────────────────────────────────
+# Approximate pairwise correlations between major forex pairs.
+# Positive = move together, Negative = move opposite.
+# Used to block opening a new position when we already hold a highly correlated pair.
+# Values sourced from long-run 5Y daily correlation data (updated periodically).
+CORRELATION_MATRIX = {
+    ("EUR_USD", "GBP_USD"):  0.85,   # Both are USD-counter pairs, move similarly
+    ("EUR_USD", "AUD_USD"):  0.70,   # Both anti-USD, moderate correlation
+    ("EUR_USD", "NZD_USD"):  0.65,
+    ("EUR_USD", "USD_CAD"): -0.80,   # Inversely correlated (USD base vs counter)
+    ("EUR_USD", "USD_CHF"): -0.90,   # Strong inverse — classic hedge pair
+    ("EUR_USD", "USD_JPY"): -0.55,
+    ("GBP_USD", "AUD_USD"):  0.60,
+    ("GBP_USD", "USD_CAD"): -0.70,
+    ("GBP_USD", "USD_CHF"): -0.75,
+    ("GBP_USD", "USD_JPY"): -0.45,
+    ("AUD_USD", "NZD_USD"):  0.90,   # Commodity bloc pairs, very high correlation
+    ("AUD_USD", "USD_CAD"): -0.65,
+    ("USD_JPY", "EUR_JPY"):  0.80,   # Both JPY-cross pairs
+    ("USD_JPY", "GBP_JPY"):  0.75,
+    ("EUR_JPY", "GBP_JPY"):  0.90,
+}
+
+
+def _get_correlation(pair_a: str, pair_b: str) -> float:
+    """Look up correlation between two pairs. Returns 0 if unknown."""
+    return (
+        CORRELATION_MATRIX.get((pair_a, pair_b))
+        or CORRELATION_MATRIX.get((pair_b, pair_a))
+        or 0.0
+    )
+
+# ── Circuit Breaker State ──────────────────────────────────────────────────────
+# Tracks daily drawdown to pause trading if losses exceed the configured threshold.
+# Resets at EOD close (23:59 UTC) when force_close_all() runs.
+_circuit_breaker_until: datetime = None
+_day_start_balance: float = None
+_day_start_date: str = None
+
+
+def _check_circuit_breaker() -> bool:
+    """
+    Check if the daily loss circuit breaker should activate.
+    Returns True if trading should be paused.
+
+    How it works:
+    - Records the account balance at the start of each trading day
+    - If balance drops by more than DAILY_LOSS_CIRCUIT_BREAKER_PCT, pauses for 24h
+    - Resets at EOD close so the next day starts fresh
+    """
+    global _circuit_breaker_until, _day_start_balance, _day_start_date
+
+    # If circuit breaker is already active, check if it's expired
+    if _circuit_breaker_until:
+        if datetime.now(timezone.utc) < _circuit_breaker_until:
+            return True
+        else:
+            logger.info("Circuit breaker expired — resuming trading")
+            _circuit_breaker_until = None
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    current_balance = broker.get_account_balance()
+
+    # Record starting balance once per day (first scan of the day)
+    if _day_start_date != today:
+        _day_start_balance = current_balance
+        _day_start_date = today
+        logger.info(f"Day start balance recorded: £{_day_start_balance:.2f}")
+        return False
+
+    if _day_start_balance and _day_start_balance > 0:
+        drawdown_pct = ((_day_start_balance - current_balance) / _day_start_balance) * 100
+
+        if drawdown_pct >= config.DAILY_LOSS_CIRCUIT_BREAKER_PCT:
+            _circuit_breaker_until = datetime.now(timezone.utc) + timedelta(hours=24)
+            logger.warning(
+                f"CIRCUIT BREAKER ACTIVATED — account down {drawdown_pct:.1f}% today "
+                f"(£{_day_start_balance:.2f} → £{current_balance:.2f}). "
+                f"Trading paused until {_circuit_breaker_until.strftime('%Y-%m-%d %H:%M UTC')}"
+            )
+            notifier._send(
+                f"🚨 *CIRCUIT BREAKER ACTIVATED*\n"
+                f"─────────────────────────────\n"
+                f"Account down *{drawdown_pct:.1f}%* today\n"
+                f"Start: £{_day_start_balance:.2f} → Now: £{current_balance:.2f}\n"
+                f"Trading paused until {_circuit_breaker_until.strftime('%H:%M UTC tomorrow')}\n\n"
+                f"_Threshold: {config.DAILY_LOSS_CIRCUIT_BREAKER_PCT}%_"
+            )
+            return True
+
+    return False
+
 
 # ── Core Jobs ─────────────────────────────────────────────────────────────────
 
@@ -79,6 +171,11 @@ def scan_markets():
     """
     if not instance_manager.is_active():
         logger.debug(f"Instance {config.INSTANCE_ID} is not active — skipping scan")
+        return
+
+    # Circuit breaker: pause all trading if daily drawdown exceeds threshold
+    if _check_circuit_breaker():
+        logger.warning("Circuit breaker active — skipping market scan")
         return
 
     logger.info("─── Market Scan Started ───")
@@ -118,6 +215,20 @@ def scan_markets():
 
 def _evaluate_pair(pair: str, available_capital: float):
     """Evaluate a single currency pair and trade if conditions are right."""
+    # BACKLOG-005: Correlation hard block — don't open a position if we already
+    # hold a highly correlated pair (avoids doubling the same directional bet)
+    open_trades = broker.get_open_trades()
+    for held in open_trades:
+        held_pair = held.get("pair") or held.get("instrument")
+        if held_pair and held_pair != pair:
+            corr = abs(_get_correlation(pair, held_pair))
+            if corr >= config.CORRELATION_BLOCK_THRESHOLD:
+                logger.info(
+                    f"Skipping {pair} — correlation {corr:.2f} with open position "
+                    f"{held_pair} exceeds threshold {config.CORRELATION_BLOCK_THRESHOLD}"
+                )
+                return
+
     candles = broker.get_candles(pair, count=config.LOOKBACK_CANDLES, granularity=config.TIMEFRAME)
     if candles is None or len(candles) < 60:
         logger.warning(f"Insufficient candle data for {pair}")
@@ -133,6 +244,19 @@ def _evaluate_pair(pair: str, available_capital: float):
     ind = indicators.calculate(candles)
     mcp_context = _get_mcp_context(pair)
 
+    # BACKLOG-004: Fetch higher-timeframe candles for trend confirmation
+    mtf_context = None
+    if config.HTF_TIMEFRAME and config.HTF_TIMEFRAME != "none":
+        try:
+            htf_candles = broker.get_candles(
+                pair, count=config.HTF_LOOKBACK_CANDLES, granularity=config.HTF_TIMEFRAME
+            )
+            if htf_candles is not None and len(htf_candles) >= 50:
+                mtf_context = indicators.calculate_trend_summary(htf_candles)
+                logger.debug(f"{pair} HTF({config.HTF_TIMEFRAME}): {mtf_context}")
+        except Exception as e:
+            logger.debug(f"HTF fetch failed for {pair}: {e}")
+
     # Get LSTM prediction if model is loaded and enabled
     ml_prediction = None
     if lstm_predictor:
@@ -141,10 +265,12 @@ def _evaluate_pair(pair: str, available_capital: float):
     if config.LSTM_SHADOW_MODE and ml_prediction:
         # Shadow mode: score WITH and WITHOUT LSTM, log both, but only act on indicator-only
         lstm_result = confidence.calculate_confidence(
-            pair=pair, indicators=ind, mcp_context=mcp_context, ml_prediction=ml_prediction
+            pair=pair, indicators=ind, mcp_context=mcp_context,
+            ml_prediction=ml_prediction, mtf_context=mtf_context
         )
         indicator_result = confidence.calculate_confidence(
-            pair=pair, indicators=ind, mcp_context=mcp_context, ml_prediction=None
+            pair=pair, indicators=ind, mcp_context=mcp_context,
+            ml_prediction=None, mtf_context=mtf_context
         )
 
         # Log the comparison so we can see if LSTM is adding value
@@ -161,7 +287,8 @@ def _evaluate_pair(pair: str, available_capital: float):
     else:
         # Live mode: LSTM score drives real trade decisions (50% weight)
         result = confidence.calculate_confidence(
-            pair=pair, indicators=ind, mcp_context=mcp_context, ml_prediction=ml_prediction
+            pair=pair, indicators=ind, mcp_context=mcp_context,
+            ml_prediction=ml_prediction, mtf_context=mtf_context
         )
 
     logger.info(f"{pair}: {result.direction} | Confidence: {result.score:.1f}% | Trade: {result.should_trade}")
@@ -211,14 +338,92 @@ def _evaluate_pair(pair: str, available_capital: float):
 
 
 def monitor_positions():
-    """Monitor all open positions every 5 minutes."""
+    """
+    Monitor all open positions every 5 minutes.
+    Applies trailing stop-loss when a position has moved far enough in profit.
+    """
     open_trades = broker.get_open_trades()
     if not open_trades:
         return
 
     for trade in open_trades:
         unrealised_pl = float(trade.get("unrealizedPL", 0))
-        logger.debug(f"Position {trade.get('instrument')} | Unrealised P&L: £{unrealised_pl:.2f}")
+        pair = trade.get("pair") or trade.get("instrument")
+        logger.debug(f"Position {pair} | Unrealised P&L: £{unrealised_pl:.2f}")
+
+        # Trailing stop-loss (BACKLOG-007): move stop closer as price moves in our favour
+        _update_trailing_stop(trade)
+
+
+def _update_trailing_stop(trade: dict):
+    """
+    Check if a position qualifies for a trailing stop-loss update.
+
+    Activation: price must have moved >= trailing_stop_activation_atr × ATR from entry.
+    Trail distance: stop is set at current_price - trail_atr × ATR (for BUY)
+                    or current_price + trail_atr × ATR (for SELL).
+    Only moves the stop in the profitable direction — never loosens it.
+    """
+    pair = trade.get("pair") or trade.get("instrument")
+    deal_id = trade.get("dealId")
+    direction = trade.get("direction", "BUY")
+    entry_price = float(trade.get("level") or trade.get("price", 0))
+    current_price = float(trade.get("currentPrice") or entry_price)
+    current_stop = trade.get("stopLevel")
+
+    if not entry_price or not current_price:
+        return
+
+    # Fetch ATR for this pair to calculate dynamic stop distances
+    try:
+        candles = broker.get_candles(pair, count=config.LOOKBACK_CANDLES, granularity=config.TIMEFRAME)
+        if candles is None or len(candles) < 14:
+            return
+        ind = indicators.calculate(candles)
+        atr = ind.atr
+    except Exception as e:
+        logger.debug(f"Could not calculate ATR for trailing stop on {pair}: {e}")
+        return
+
+    activation_distance = config.TRAILING_STOP_ACTIVATION_ATR * atr
+    trail_distance = config.TRAILING_STOP_TRAIL_ATR * atr
+
+    if direction == "BUY":
+        price_move = current_price - entry_price
+        if price_move < activation_distance:
+            return  # Not enough profit to activate trailing stop
+
+        new_stop = round(current_price - trail_distance, 5)
+
+        # Only move stop UP for a BUY — never loosen
+        if current_stop and new_stop <= float(current_stop):
+            return
+    else:
+        price_move = entry_price - current_price
+        if price_move < activation_distance:
+            return
+
+        new_stop = round(current_price + trail_distance, 5)
+
+        # Only move stop DOWN for a SELL — never loosen
+        if current_stop and new_stop >= float(current_stop):
+            return
+
+    # Update the stop-loss on IG
+    logger.info(
+        f"Trailing stop: {pair} {direction} | Entry: {entry_price:.5f} | "
+        f"Current: {current_price:.5f} | Move: {price_move:.5f} | "
+        f"Old stop: {current_stop} → New stop: {new_stop:.5f}"
+    )
+    success = broker.update_stop_loss(deal_id, new_stop)
+    if success:
+        notifier._send(
+            f"📈 *Trailing Stop Updated*\n"
+            f"Pair: {pair} ({direction})\n"
+            f"Entry: {entry_price:.5f}\n"
+            f"Price: {current_price:.5f} (+{price_move:.5f})\n"
+            f"New stop: {new_stop:.5f}"
+        )
 
 
 def eod_evaluation():
@@ -229,9 +434,15 @@ def eod_evaluation():
 
 def force_close_all():
     """Runs at 23:59 UTC — closes every remaining open position."""
+    global _day_start_balance, _day_start_date, _circuit_breaker_until
+
     logger.info("Running end-of-day force close")
     # Clear candle cache at day rollover so fresh data loads tomorrow
     broker.clear_candle_cache()
+    # Reset circuit breaker state so the next trading day starts fresh
+    _day_start_balance = None
+    _day_start_date = None
+    _circuit_breaker_until = None
     close_results = eod_manager.force_close_non_held_positions()
 
     if close_results:
@@ -258,7 +469,6 @@ def send_daily_report():
     """Runs at 00:05 UTC — compiles and sends the daily Telegram report."""
     logger.info("Generating daily report")
 
-    from datetime import timedelta
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
     trades = storage.get_trades_for_date(yesterday)
 
@@ -311,7 +521,6 @@ def send_weekly_report():
         logger.error(f"Failed to fetch weekly outlook: {e}")
         outlook_data = {"claude_analysis": "Weekly outlook unavailable."}
 
-    from datetime import timedelta
     today = datetime.now(timezone.utc).date()
     week_start = (today - timedelta(days=7)).isoformat()
     week_end = today.isoformat()

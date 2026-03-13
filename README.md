@@ -39,10 +39,10 @@ cd ai-trader-bot
 
 You need three free accounts:
 
-**A) OANDA (Broker)**
-1. Go to [oanda.com](https://www.oanda.com) → Open an Account → Practice Account
-2. Log in → My Account → Manage API Access → Generate Token
-3. Note your **API Token** and **Account ID**
+**A) IG Group (Broker)**
+1. Go to [ig.com](https://www.ig.com) → Open a Demo Account
+2. Log in → My IG → Settings → API → Create API Key
+3. Note your **API Key**, **Username**, **Password**, and **Account ID**
 
 **B) Telegram (Notifications)**
 1. Open Telegram → search for `@BotFather`
@@ -70,13 +70,15 @@ Copy-Item .env.example .env
 Open `.env` in a text editor and fill in your values:
 
 ```env
-OANDA_API_TOKEN=your_token_here
-OANDA_ACCOUNT_ID=your_account_id_here
-OANDA_ENVIRONMENT=practice          # Keep as 'practice' for demo trading
+IG_API_KEY=your_api_key_here
+IG_USERNAME=your_username_here
+IG_PASSWORD=your_password_here
+IG_ACCOUNT_ID=your_account_id_here
+IG_ENVIRONMENT=demo                  # Keep as 'demo' for demo trading
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 ANTHROPIC_API_KEY=your_claude_key
-MAX_CAPITAL=500                     # Maximum £ in open trades at once
+MAX_CAPITAL=500                      # Maximum £ in open trades at once
 ```
 
 ### Step 5 — Start the Bot
@@ -116,7 +118,6 @@ docker-compose down
 
 ```bash
 git pull
-docker-compose down
 docker-compose up -d --build
 ```
 
@@ -135,20 +136,22 @@ ai-trader-bot/
 │       └── confidence.py       ← Scores trade signals (0–100%)
 │
 ├── broker/
-│   └── oanda_client.py         ← All OANDA API calls (prices, orders, etc.)
+│   └── ig_client.py            ← All IG Group API calls (prices, orders, etc.)
 │
 ├── mcp_server/
 │   └── server.py               ← Provides market context to the AI
 │
 ├── notifications/
-│   └── telegram_bot.py         ← Sends all Telegram messages
+│   ├── telegram_bot.py         ← Sends all Telegram messages
+│   └── telegram_chat.py        ← Telegram command handler (interactive)
 │
 ├── risk/
 │   ├── position_sizer.py       ← Calculates safe trade sizes
 │   └── eod_manager.py          ← Manages end-of-day closes & 98% rule
 │
 ├── data/
-│   └── storage.py              ← Saves trade history locally
+│   ├── storage.py              ← SQLite trade & candle storage
+│   └── context_writer.py       ← Generates LIVE_CONTEXT.md every 15min
 │
 ├── scripts/
 │   └── health_monitor.py       ← Alerts if anything goes wrong
@@ -158,7 +161,8 @@ ai-trader-bot/
 │
 ├── .env.example                ← Template for your API keys
 ├── .env                        ← Your actual keys (NEVER commit this)
-├── docker-compose.yml          ← Defines all services
+├── docker-compose.yml          ← Production services
+├── docker-compose.uat.yml      ← UAT / testing services
 ├── Dockerfile                  ← Builds the main bot container
 ├── Dockerfile.mcp              ← Builds the MCP server container
 └── requirements.txt            ← Python dependencies
@@ -195,6 +199,26 @@ This should happen rarely — perhaps 2–3 times per month at most.
 
 ---
 
+## Telegram Commands
+
+Send these to your bot in Telegram:
+
+| Command | What it does |
+|---------|-------------|
+| `/today` | Today's trades and P&L |
+| `/positions` | Currently open positions |
+| `/health` | System health status |
+| `/plan` | Tomorrow's trading plan |
+| `/stats` | All-time performance stats |
+| `/query <question>` | Query trade database in plain English |
+| `/devops` | Today's code changes (git log) |
+| `/fallbacktest` | Test yfinance backup data source |
+| `/help` | Show all commands |
+
+Or just send a plain English question like *"How did EUR/USD do this week?"*
+
+---
+
 ## Telegram Messages You'll Receive
 
 | Message | When |
@@ -207,6 +231,7 @@ This should happen rarely — perhaps 2–3 times per month at most.
 | 📊 Daily Report | Every night after 23:59 close |
 | 📊 Weekly Report | Every Sunday at 20:00 UTC |
 | ⚠️ Health Alert | If bot crashes or goes offline |
+| 🛠 Dev Activity | After code changes are deployed |
 
 ---
 
@@ -256,7 +281,7 @@ cp .env.example .env    # Fill in your keys
 docker-compose up -d
 ```
 
-Your trade history in `data/` can be copied across too.
+Your trade history in `data_store/` can be copied across too.
 
 ---
 
@@ -272,9 +297,10 @@ Check for missing .env values.
 - Verify TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env
 - Make sure you've sent at least one message to your bot
 
-**OANDA connection error:**
-- Check OANDA_API_TOKEN is correct
-- Make sure OANDA_ENVIRONMENT=practice (not live) for demo
+**IG connection error:**
+- Check IG_API_KEY and IG_USERNAME are correct
+- Make sure IG_ENVIRONMENT=demo (not live) for demo trading
+- IG demo accounts have a 10k data points/week limit — the bot caches candles to stay within this
 
 **Out of disk space:**
 ```bash
@@ -285,10 +311,10 @@ docker system prune   # Remove unused Docker images
 
 ## Important Disclaimers
 
-- This bot trades with real money when configured with a live OANDA account
+- This bot trades with real money when configured with a live IG account
 - Forex trading involves substantial risk of loss
 - Past performance does not guarantee future results
-- Start with demo trading (OANDA practice account) for at least 4 weeks
+- Start with demo trading (IG demo account) for at least 4 weeks
 - Never trade with money you cannot afford to lose
 
 ---

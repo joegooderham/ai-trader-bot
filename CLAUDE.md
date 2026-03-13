@@ -65,7 +65,7 @@ Each 15-minute scan:
 |--------|---------|
 | `bot/config.py` | Single config source — loads from `.env` + `config/config.yaml` |
 | `broker/ig_client.py` | IG Group REST API client with session auth, candle caching, epic mapping |
-| `data/storage.py` | JSON file-based trade history (no database) |
+| `data/storage.py` | SQLite trade history and candle storage (tables: trades, overnight_holds, candles) |
 | `data/context_writer.py` | Generates `data/LIVE_CONTEXT.md` every 15 min for Claude Projects visibility |
 | `notifications/telegram_bot.py` | All outbound Telegram messages (trades, reports, alerts) |
 | `notifications/telegram_chat.py` | Inbound Telegram command handler (runs on main thread) |
@@ -88,7 +88,7 @@ Each 15-minute scan:
 - IG epic mapping (e.g., `EUR_USD` → `CS.D.EURUSD.MINI.IP`) is defined in `broker/ig_client.py`
 - Demo account has 10,000 data points/week limit — candle caching strategy keeps usage ~1,320 points/week
 - Auth uses CST + X-SECURITY-TOKEN headers with 6-hour auto-refresh
-- The bot was migrated from Oanda to IG; all Oanda references have been removed
+- Migrated from Oanda to IG in March 2026 — no Oanda code or references remain
 
 ## Git Workflow Rules
 
@@ -135,7 +135,7 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 ## Tech Stack
 
 - **Current**: Python, Docker, IG Group API, Telegram, APScheduler, FastAPI, Anthropic Claude API
-- **Coming soon**: yfinance (market data), SQLite (replacing JSON storage)
+- **Data**: SQLite (trade history + candle cache), yfinance (fallback market data)
 - **Secrets**: Injected via GitHub Actions — never hardcode credentials in code or config files
 
 ## Important Constraints

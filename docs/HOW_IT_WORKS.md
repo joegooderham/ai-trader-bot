@@ -9,7 +9,7 @@ Every 15 minutes, the bot wakes up and asks the same question for each currency 
 
 > *"Is there a good trading opportunity right now, and how confident am I?"*
 
-If the answer is confident enough (60% or above), it places a trade.  
+If the answer is confident enough (60% or above), it places a trade.
 If not, it does nothing and waits for the next scan.
 
 Simple as that.
@@ -19,37 +19,41 @@ Simple as that.
 ## Step by Step — What Happens Each Scan
 
 ### 1. Fetch Price Data
-The bot asks OANDA: *"Give me the last 200 price bars for EUR/USD."*
+The bot asks IG Group: *"Give me the last 60 price bars for EUR/USD."*
 
-A "price bar" contains the open, high, low, and close price for a 15-minute period.  
-200 bars = about 50 hours of recent price history.
+A "price bar" contains the open, high, low, and close price for a 1-hour period.
+60 bars = about 2.5 days of recent price history.
+
+If IG is unavailable (rate limits, downtime), the bot automatically falls back to Yahoo Finance (yfinance) as a free backup data source. You'll get a Telegram alert when this happens.
+
+Candle data is also stored in a local SQLite database, so the bot checks its cache before making API calls — this keeps IG data usage well within the demo account's 10k points/week limit.
 
 ### 2. Calculate Technical Indicators
 The bot runs the price data through several standard trading tools:
 
-**RSI (Relative Strength Index)**  
-Imagine a rubber band. The more stretched it gets, the more likely it snaps back.  
-RSI measures how "stretched" the price is.  
-- Below 30 = stretched downward (potential buy)  
+**RSI (Relative Strength Index)**
+Imagine a rubber band. The more stretched it gets, the more likely it snaps back.
+RSI measures how "stretched" the price is.
+- Below 30 = stretched downward (potential buy)
 - Above 70 = stretched upward (potential sell)
 
-**MACD**  
-Compares a fast-moving average to a slow-moving average of price.  
-When the fast one crosses the slow one, momentum is shifting.  
+**MACD**
+Compares a fast-moving average to a slow-moving average of price.
+When the fast one crosses the slow one, momentum is shifting.
 Think of it like a car — MACD tells you whether the engine is accelerating or braking.
 
-**Bollinger Bands**  
-Three lines around the price — a middle average and two outer bands.  
-When price touches the outer bands, it often bounces back to the middle.  
+**Bollinger Bands**
+Three lines around the price — a middle average and two outer bands.
+When price touches the outer bands, it often bounces back to the middle.
 Like a ball bouncing off walls.
 
-**EMA Crossover**  
-Two moving averages — one reacts quickly to price (20-period), one slowly (50-period).  
-When the fast one is above the slow one, the trend is up.  
+**EMA Crossover**
+Two moving averages — one reacts quickly to price (20-period), one slowly (50-period).
+When the fast one is above the slow one, the trend is up.
 When it's below, the trend is down.
 
-**ATR (Average True Range)**  
-Measures how much a price typically moves in one period.  
+**ATR (Average True Range)**
+Measures how much a price typically moves in one period.
 Used to set stop-losses at a sensible distance — not too tight, not too loose.
 
 ### 3. Ask the MCP Server for Context
@@ -87,23 +91,24 @@ FINAL SCORE                →  0 to 100%
 The bot **only trades if the final score is 60% or above**.
 
 ### 5. Size the Trade Safely
-If the score qualifies, the bot calculates how many units to buy or sell.
+If the score qualifies, the bot calculates how many IG mini CFD contracts to trade.
 
 The rule: **risk only 2% of your total capital on any single trade**.
 
 Example with £500 capital:
 - Maximum loss per trade: £10 (2% of £500)
 - Stop-loss is set 1.5 ATR away from entry
-- Trade size is calculated so that if the stop-loss is hit, you lose exactly £10
+- Contract size is calculated so that if the stop-loss is hit, you lose exactly £10
+- Minimum is always 1 contract (10,000 currency units)
 
 This is called "position sizing" — it's what prevents any single bad trade from doing real damage.
 
 ### 6. Place the Trade
-The bot tells OANDA to buy or sell a specific amount, with:
-- **Stop-Loss**: The price at which OANDA will automatically cut the loss
-- **Take-Profit**: The price at which OANDA will automatically bank the profit
+The bot tells IG Group to buy or sell a specific number of contracts, with:
+- **Stop-Loss**: The price at which IG will automatically cut the loss
+- **Take-Profit**: The price at which IG will automatically bank the profit
 
-Both orders are set on OANDA's servers. Even if the bot crashes, your position is protected.
+Both orders are set on IG's servers. Even if the bot crashes, your position is protected.
 
 ### 7. Send You a Telegram Message
 Immediately after placing the trade, you get a message on Telegram:
@@ -120,13 +125,13 @@ Immediately after placing the trade, you get a message on Telegram:
 
 The bot closes every open position at 23:59 UTC.
 
-**Why?**  
+**Why?**
 Holding trades overnight introduces "gap risk" — prices can jump sharply when major news breaks outside trading hours. Day traders close everything daily to avoid waking up to unexpected losses.
 
-**The one exception — the 98% Rule:**  
-At 23:45, the bot re-evaluates every open position one last time.  
-If a position scores 98% or higher AND is currently profitable, it's held overnight.  
-The stop-loss is tightened to protect 75% of the current profit.  
+**The one exception — the 98% Rule:**
+At 23:45, the bot re-evaluates every open position one last time.
+If a position scores 98% or higher AND is currently profitable, it's held overnight.
+The stop-loss is tightened to protect 75% of the current profit.
 You get a Telegram message telling you which position was held and why.
 
 This exception is rare. The 98% bar is intentionally very high.
@@ -161,17 +166,17 @@ Every Sunday evening, you get a bigger picture:
 
 The bot doesn't have memory between restarts, but it does get smarter over time in two ways:
 
-**1. Daily Learning Records**  
+**1. Daily Learning Records**
 After every trading day, the MCP server records what market conditions were like and how trades performed. Over 30 days, this builds a rich dataset of what works and what doesn't.
 
-**2. Weekly Claude Analysis**  
+**2. Weekly Claude Analysis**
 Every Sunday, Claude AI reviews the week's trading results alongside market context. It identifies patterns — "EUR/USD trades have been more profitable during London session" or "high-volatility periods have led to losses" — and factors these into the confidence scoring going forward.
 
 ---
 
 ## Why This Isn't Just Pattern Matching
 
-Traditional trading bots spot patterns and act on them blindly.  
+Traditional trading bots spot patterns and act on them blindly.
 For example: "RSI below 30 = always buy." That's pattern matching. It works sometimes, fails catastrophically in others.
 
 This bot is different because:
@@ -190,8 +195,8 @@ This bot is different because:
 
 Docker packages the entire application — code, libraries, configuration — into a container that runs identically everywhere.
 
-Today: your Windows laptop in a shed.  
-Tomorrow: a £4/month Linux server in a datacentre.  
+Today: your Windows laptop in a shed.
+Tomorrow: a £4/month Linux server in a datacentre.
 Same command. Same behaviour. Zero reconfiguration.
 
 It also means:

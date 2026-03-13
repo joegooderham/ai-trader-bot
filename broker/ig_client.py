@@ -737,6 +737,10 @@ class IGClient:
             data = self._get("/positions", version="2")
             positions = data.get("positions", [])
 
+            if positions:
+                # Log the raw structure of the first position for debugging
+                logger.debug(f"IG positions raw sample: {positions[0]}")
+
             result = []
             for pos in positions:
                 position = pos.get("position", {})
@@ -744,20 +748,39 @@ class IGClient:
                 epic     = market.get("epic",  "")
                 pair     = self._epic_to_pair(epic)
 
+                # IG API v2 uses "size" not "dealSize", and doesn't return upl directly
+                # Calculate unrealized P&L from entry level vs current bid/offer
+                size      = position.get("size") or position.get("dealSize") or 0
+                level     = position.get("level") or 0
+                direction = position.get("direction", "")
+                contract  = position.get("contractSize", 10000)
+
+                # Current price: use bid for SELL (closing a sell = buying), offer for BUY
+                current_price = market.get("bid") if direction == "BUY" else market.get("offer")
+                current_price = current_price or level
+
+                # P&L = (current - entry) * size * contractSize for BUY, inverted for SELL
+                if direction == "BUY":
+                    upl = (current_price - level) * size * contract
+                else:
+                    upl = (level - current_price) * size * contract
+
                 result.append({
                     "dealId":       position.get("dealId"),
                     "pair":         pair,
                     "epic":         epic,
                     "instrument":   pair,
-                    "direction":    position.get("direction"),
-                    "dealSize":     position.get("dealSize"),
-                    "level":        position.get("level"),
-                    "currentUnits": position.get("dealSize"),
-                    "unrealizedPL": position.get("upl"),
+                    "direction":    direction,
+                    "dealSize":     size,
+                    "level":        level,
+                    "currentUnits": size,
+                    "unrealizedPL": round(upl, 2),
                     "stopLevel":    position.get("stopLevel"),
                     "limitLevel":   position.get("limitLevel"),
                     "openTime":     position.get("createdDateUTC"),
-                    "price":        position.get("level"),
+                    "price":        level,
+                    "currentPrice": current_price,
+                    "contractSize": contract,
                 })
             return result
 

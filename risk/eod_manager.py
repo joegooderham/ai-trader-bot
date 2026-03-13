@@ -136,13 +136,24 @@ class EODManager:
             units = int(trade.get("currentUnits", 0))
             direction = "BUY" if units > 0 else "SELL"
 
+            # Get LSTM prediction if available
+            ml_prediction = None
+            try:
+                from bot.engine.lstm import LSTMPredictor
+                # Import the global predictor from scheduler to avoid loading model twice
+                from bot.scheduler import lstm_predictor
+                if lstm_predictor:
+                    ml_prediction = lstm_predictor.predict(pair, candles)
+            except ImportError:
+                pass  # LSTM not available — fall back to indicator-only scoring
+
             # For overnight holds, we apply a strict penalty to the base score
             # This ensures the 98% bar is genuinely hard to reach
             result = confidence.calculate_confidence(
                 pair=pair,
                 indicators=ind,
                 mcp_context={},  # No MCP for overnight eval (keep it fast)
-                ml_prediction=None
+                ml_prediction=ml_prediction
             )
 
             # Apply overnight penalty — must be very strong to hold

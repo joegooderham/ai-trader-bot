@@ -133,7 +133,12 @@ ai-trader-bot/
 │   ├── config.py               ← Loads all settings and API keys
 │   └── engine/
 │       ├── indicators.py       ← Calculates RSI, MACD, Bollinger Bands, etc.
-│       └── confidence.py       ← Scores trade signals (0–100%)
+│       ├── confidence.py       ← Scores trade signals (0–100%)
+│       └── lstm/               ← Neural network for trade direction prediction
+│           ├── model.py        ← PyTorch LSTM architecture (64 hidden, 3-class)
+│           ├── features.py     ← 12 normalised features from OHLCV data
+│           ├── trainer.py      ← Continuous training pipeline with adaptive data
+│           └── predictor.py    ← Inference wrapper for live predictions
 │
 ├── broker/
 │   └── ig_client.py            ← All IG Group API calls (prices, orders, etc.)
@@ -176,7 +181,7 @@ Every trade the bot considers gets scored from 0–100%. Here's what goes into t
 
 | Component | Weight | What it measures |
 |-----------|--------|-----------------|
-| LSTM Neural Network | 50% | AI prediction of price direction |
+| LSTM Neural Network | 50% | AI prediction of price direction (continuously retrained) |
 | MACD + RSI | 20% | Is momentum shifting? Is price overbought/oversold? |
 | EMA Trend | 15% | Is the short-term trend aligned with the signal? |
 | Bollinger Bands | 10% | Is price at an extreme? |
@@ -199,6 +204,54 @@ This should happen rarely — perhaps 2–3 times per month at most.
 
 ---
 
+## LSTM Neural Network — Continuous Training
+
+The bot includes a PyTorch LSTM model that predicts trade direction (BUY/SELL/HOLD) and contributes 50% of the confidence score.
+
+### How It Trains
+
+The LSTM retrains automatically on a rolling interval (default: every 4 hours, configurable in `config.yaml`). Each training cycle:
+
+1. **Tops up data** — fetches the latest H1 candles from yfinance since the last stored candle
+2. **Builds features** — 12 normalised indicators per candle (RSI, MACD, Bollinger %B, EMA distances, ATR, volume, hour encoding)
+3. **Labels data** — looks ahead 3 candles; BUY if price rises > 1 ATR, SELL if it falls > 1 ATR, HOLD otherwise
+4. **Trains** — 30-candle sequences, early stopping on validation loss (patience=7)
+5. **Reloads** — the live predictor hot-swaps to the new model without restarting the bot
+
+### Adaptive Data Window
+
+Training starts with 3 months of data. If validation accuracy falls below 50%, the window automatically extends by 2 weeks for every 10% below threshold (capped at 6 months):
+
+| Val Accuracy | Extra Data | Total Window |
+|---|---|---|
+| 50%+ | none | 3 months |
+| 40% | +2 weeks | ~3.5 months |
+| 30% | +4 weeks | ~4 months |
+| 20% | +6 weeks | ~4.5 months |
+
+### Two Data Sources Feed the Model
+
+- **IG live candles** — every 15-min market scan saves candles to SQLite (`ig_live` source), so real broker data flows in continuously
+- **yfinance refresh** — each retrain cycle tops up from the latest stored candle to now, filling any gaps
+
+### Shadow Mode
+
+When `shadow_mode: true` in config.yaml (default), every scan logs LSTM-enhanced vs indicator-only scores side by side **without the LSTM affecting actual trades**. This lets you validate the model before letting it drive real decisions. Set `shadow_mode: false` once you're confident the LSTM is adding value.
+
+### Manual Training & Backtesting
+
+```bash
+# Trigger a training run inside Docker
+docker exec ai-trader-bot python -m bot.engine.lstm.trainer
+
+# Run backtest — compares LSTM vs indicator-only on historical data
+docker exec ai-trader-bot python -m bot.engine.lstm.backtest
+```
+
+Or use `/backtest` in Telegram to run the simulation and get results in chat.
+
+---
+
 ## Telegram Commands
 
 Send these to your bot in Telegram:
@@ -212,6 +265,7 @@ Send these to your bot in Telegram:
 | `/stats` | All-time performance stats |
 | `/query <question>` | Query trade database in plain English |
 | `/devops` | Today's code changes (git log) |
+| `/backtest` | Run LSTM vs indicator-only simulation on historical data |
 | `/fallbacktest` | Test yfinance backup data source |
 | `/help` | Show all commands |
 
@@ -231,6 +285,7 @@ Or just send a plain English question like *"How did EUR/USD do this week?"*
 | 📊 Daily Report | Every night after 23:59 close |
 | 📊 Weekly Report | Every Sunday at 20:00 UTC |
 | ⚠️ Health Alert | If bot crashes or goes offline |
+| 🧠 LSTM Retrained | After each training cycle (with accuracy + duration) |
 | 🛠 Dev Activity | After code changes are deployed |
 
 ---

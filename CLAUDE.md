@@ -49,11 +49,24 @@ The system has three runtime processes orchestrated via docker-compose:
 
 Each 15-minute scan:
 1. Fetch candles from IG API (`broker/ig_client.py`) — cached to stay within IG demo's 10k points/week allowance
-2. Calculate technical indicators (`bot/engine/indicators.py`) — RSI, MACD, Bollinger Bands, EMA crossover, ATR, volume
-3. Fetch market context from MCP server (`mcp_server/server.py`)
-4. Score confidence 0-100% (`bot/engine/confidence.py`) — weighted: LSTM 50%, MACD/RSI 20%, EMA 15%, Bollinger 10%, Volume 5%
-5. If score >= 60%, calculate position size (`risk/position_sizer.py`) using ATR-based stops and 2% risk per trade
-6. Place trade via IG API, notify via Telegram
+2. **Save candles to SQLite** (`data/storage.py`) — live broker data feeds into LSTM training
+3. Calculate technical indicators (`bot/engine/indicators.py`) — RSI, MACD, Bollinger Bands, EMA crossover, ATR, volume
+4. Get LSTM prediction (`bot/engine/lstm/predictor.py`) — BUY/SELL/HOLD with probability
+5. Fetch market context from MCP server (`mcp_server/server.py`)
+6. Score confidence 0-100% (`bot/engine/confidence.py`) — weighted: LSTM 50%, MACD/RSI 20%, EMA 15%, Bollinger 10%, Volume 5%
+7. If score >= 60%, calculate position size (`risk/position_sizer.py`) using ATR-based stops and 2% risk per trade
+8. Place trade via IG API, notify via Telegram
+
+### LSTM Continuous Training
+
+The LSTM retrains automatically on a configurable interval (default 4h, set via `lstm.retrain_interval_minutes` in config.yaml):
+- Tops up SQLite with latest candles from yfinance (`trainer.refresh_candles()`)
+- Live IG candles are also saved to SQLite every 15-min scan (`source="ig_live"`)
+- Trains on 3 months of data by default; extends by 2 weeks per 10% below 50% accuracy (capped at 6 months)
+- Hot-reloads the predictor after training — no restart needed
+- **Shadow mode** (`lstm.shadow_mode: true`): logs LSTM vs indicator-only scores side by side without affecting trades
+- Training duration is reported in Telegram so the retrain interval can be tightened towards real-time
+- Retrain uses a threading lock so cycles don't stack up
 
 ### End-of-Day Rules
 - 23:45 UTC: `eod_manager.py` re-scores open positions; only holds overnight if confidence >= 98% AND profitable
@@ -69,6 +82,7 @@ Each 15-minute scan:
 | `data/context_writer.py` | Generates `data/LIVE_CONTEXT.md` every 15 min for Claude Projects visibility |
 | `notifications/telegram_bot.py` | All outbound Telegram messages (trades, reports, alerts) |
 | `notifications/telegram_chat.py` | Inbound Telegram command handler (runs on main thread) |
+| `bot/engine/lstm/` | LSTM neural network: model definition, feature engineering, continuous trainer, inference predictor |
 | `bot/instance.py` | Multi-instance heartbeat coordination (single instance currently) |
 
 ## Configuration
@@ -134,8 +148,8 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 
 ## Tech Stack
 
-- **Current**: Python, Docker, IG Group API, Telegram, APScheduler, FastAPI, Anthropic Claude API
-- **Data**: SQLite (trade history + candle cache), yfinance (fallback market data)
+- **Current**: Python, Docker, IG Group API, Telegram, APScheduler, FastAPI, Anthropic Claude API, PyTorch (LSTM)
+- **Data**: SQLite (trade history + candle cache), yfinance (historical data + refresh)
 - **Secrets**: Injected via GitHub Actions — never hardcode credentials in code or config files
 
 ## Important Constraints

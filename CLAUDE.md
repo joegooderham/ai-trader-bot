@@ -41,7 +41,7 @@ The system has three runtime processes orchestrated via docker-compose:
 
 1. **Trading Bot** (`bot/scheduler.py`) — Entry point. Uses APScheduler to run market scans every 15 min, position monitoring every 5 min, and EOD operations at 23:45/23:59 UTC. Telegram polling runs on the main thread; the scheduler runs in a daemon thread.
 
-2. **MCP Server** (`mcp_server/server.py`) — FastAPI service on port 8090 providing market context (economic calendar, sentiment, correlations, volatility, session stats) with 30-min cache. Called by the bot during each scan to enrich trade decisions.
+2. **MCP Server** (`mcp_server/server.py`) — FastAPI service on port 8090 providing market context (economic calendar, sentiment, correlations, volatility, session stats) with 30-min cache. Called by the bot during each scan to enrich trade decisions. Also serves LSTM analytics endpoints.
 
 3. **Health Monitor** (`scripts/health_monitor.py`) — Checks bot, MCP server, IG API reachability, and disk space every 60 seconds. Sends Telegram alerts on failure/recovery.
 
@@ -57,6 +57,16 @@ Each 15-minute scan:
 7. If score >= 60%, calculate position size (`risk/position_sizer.py`) using ATR-based stops and 2% risk per trade
 8. Place trade via IG API, notify via Telegram
 
+### LSTM v2 Architecture
+
+The LSTM model (`bot/engine/lstm/model.py`) uses a 2-layer LSTM with self-attention:
+- **18 input features** (`features.py`): standard technicals + day cyclical encoding, RSI rate-of-change, MACD-signal distance, close-vs-range, EMA cross momentum
+- **Self-attention mechanism**: weights important timesteps across the 30-candle sequence rather than relying solely on the final hidden state
+- **Architecture**: 2-layer LSTM (96 hidden units), attention layer, batch normalization, dropout 0.3, ~119k parameters
+- **Training enhancements**: WeightedRandomSampler for class imbalance, ReduceLROnPlateau scheduler, gradient clipping (max_norm=1.0)
+- **Model versioning**: each retrain saves a timestamped copy alongside `lstm_v1.pt` for rollback
+- Architecture params configurable in `config.yaml` under `lstm:` (hidden_size, num_layers, dropout)
+
 ### LSTM Continuous Training
 
 The LSTM retrains automatically on a configurable interval (default 4h, set via `lstm.retrain_interval_minutes` in config.yaml):
@@ -64,9 +74,19 @@ The LSTM retrains automatically on a configurable interval (default 4h, set via 
 - Live IG candles are also saved to SQLite every 15-min scan (`source="ig_live"`)
 - Trains on 3 months of data by default; extends by 2 weeks per 10% below 50% accuracy (capped at 6 months)
 - Hot-reloads the predictor after training — no restart needed
-- **Shadow mode** (`lstm.shadow_mode: true`): logs LSTM vs indicator-only scores side by side without affecting trades
+- **Shadow mode** (`lstm.shadow_mode: true`): logs LSTM vs indicator-only scores side by side without affecting trades. Set to `false` to give LSTM its full 50% weight in live confidence scoring.
 - Training duration is reported in Telegram so the retrain interval can be tightened towards real-time
 - Retrain uses a threading lock so cycles don't stack up
+
+### LSTM Analytics Pipeline
+
+Real-time monitoring of LSTM performance:
+- **Prediction logging** — every LSTM prediction is saved to SQLite with pair, direction, confidence, and entry price
+- **Outcome resolution** (`resolve_prediction_outcomes`) — hourly job checks 3 subsequent candles to determine if prediction was correct (same logic as training labels)
+- **Drift detection** (`bot/engine/lstm/drift.py`) — compares rolling 24h live accuracy vs training accuracy; flags >15% degradation; triggers retrain recommendation
+- **Metrics engine** (`bot/analytics/metrics.py`) — computes accuracy at 24h/7d/30d windows, LSTM edge vs indicators, per-pair accuracy, weekly trend
+- **Scheduled jobs**: outcome resolution (60min), drift check (30min), analytics snapshot (60min)
+- **MCP endpoints**: `/analytics/model`, `/analytics/predictions`, `/analytics/accuracy`, `/analytics/drift`, `/analytics/performance`, `/analytics/summary`
 
 ### End-of-Day Rules
 - 23:45 UTC: `eod_manager.py` re-scores open positions; only holds overnight if confidence >= 98% AND profitable
@@ -78,24 +98,45 @@ The LSTM retrains automatically on a configurable interval (default 4h, set via 
 |--------|---------|
 | `bot/config.py` | Single config source — loads from `.env` + `config/config.yaml` |
 | `broker/ig_client.py` | IG Group REST API client with session auth, candle caching, epic mapping |
-| `data/storage.py` | SQLite trade history and candle storage (tables: trades, overnight_holds, candles) |
+| `data/storage.py` | SQLite storage (tables: trades, overnight_holds, candles, predictions, model_metrics, analytics_snapshots) |
 | `data/context_writer.py` | Generates `data/LIVE_CONTEXT.md` every 15 min for Claude Projects visibility |
-| `notifications/telegram_bot.py` | All outbound Telegram messages (trades, reports, alerts) |
-| `notifications/telegram_chat.py` | Inbound Telegram command handler (runs on main thread) |
-| `bot/engine/lstm/` | LSTM neural network: model definition, feature engineering, continuous trainer, inference predictor |
+| `notifications/telegram_bot.py` | Outbound Telegram messages — trading bot for trades/reports, system bot for ops/health alerts |
+| `notifications/telegram_chat.py` | Inbound Telegram commands: /status, /balance, /datastatus, /accuracy, /model, /drift, /performance |
+| `bot/engine/lstm/` | LSTM v2: model (attention), features (18), trainer (weighted sampling), predictor, drift detector |
+| `bot/analytics/metrics.py` | Computes rolling LSTM accuracy, edge vs indicators, per-pair performance, weekly trends |
 | `bot/instance.py` | Multi-instance heartbeat coordination (single instance currently) |
+
+### Dual Telegram Bots
+
+Two separate Telegram bots keep trading signals and system ops separate:
+- **Trading bot** (`TELEGRAM_BOT_TOKEN`): trade opens/closes, daily/weekly reports, overnight holds, trailing stop updates
+- **System bot** (`TELEGRAM_BOT_SYS_TOKEN`): health alerts, recovery, data source fallbacks, startup/shutdown, drift alerts, circuit breaker
+- If `TELEGRAM_BOT_SYS_TOKEN` is not set, all messages fall back to the trading bot (zero breaking change)
+- yfinance fallback alerts are deduplicated — one summary alert when IG fails, one recovery message when all pairs return. Use `/datastatus` for on-demand status.
+
+### Telegram Commands
+
+| Command | Description |
+|---------|-------------|
+| `/status` | Current bot status, open positions |
+| `/balance` | Account balance |
+| `/datastatus` | IG vs yfinance data source status per pair |
+| `/accuracy` | Rolling LSTM prediction accuracy (24h/7d/30d) |
+| `/model` | LSTM model info (version, params, last train) |
+| `/drift` | Drift detection status |
+| `/performance` | LSTM performance metrics |
 
 ## Configuration
 
 - **Environment variables**: Copy `.env.example` to `.env` and fill in IG, Telegram, and Anthropic API credentials
-- **Trading parameters**: `config/config.yaml` — pairs, timeframes, confidence thresholds, risk settings, schedule times
+- **Trading parameters**: `config/config.yaml` — pairs, timeframes, confidence thresholds, risk settings, schedule times, LSTM architecture
 - **Config is loaded once** at import time by `bot/config.py`; changes require restart
 
 ## Deployment
 
 - **CI/CD**: GitHub Actions (`.github/workflows/ci.yml`) on push to main — rebuilds and restarts Docker containers on a self-hosted Windows runner
 - **All secrets** are stored as GitHub Secrets and passed as environment variables in docker-compose
-- **Volumes**: `./data`, `./logs`, `./config` are mounted into containers for persistence
+- **Volumes**: `./data_store`, `./logs`, `./config` are mounted into containers for persistence
 
 ## IG Broker Integration Notes
 
@@ -158,4 +199,4 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 - Minimum trade size: 1 IG mini CFD contract (10,000 currency units)
 - `data/LIVE_CONTEXT.md` is auto-generated — do not manually edit
 - Telegram bot must poll on the main thread (Python's `set_wakeup_fd` requirement)
-2
+- Every directory has a `README.md` with a high-level overview — keep these updated when adding new modules

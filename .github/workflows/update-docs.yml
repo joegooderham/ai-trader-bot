@@ -1,0 +1,83 @@
+name: Auto-Update Documentation
+
+# Runs after CI deploys — analyses code changes and updates docs
+# Uses Claude API to intelligently update only affected documentation
+
+on:
+  workflow_run:
+    workflows: ["AI Trader Bot"]  # Runs after the main CI workflow completes
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:  # Manual trigger for testing
+
+jobs:
+  update-docs:
+    runs-on: self-hosted
+    # Only run if the triggering workflow succeeded (or manual dispatch)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 50  # Need history to find last doc-update commit
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for code changes (skip if only .md files changed)
+        id: check
+        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        run: |
+          # Get changed files in the last commit
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          CODE_CHANGED=$(echo "$CHANGED" | grep -v '\.md$' || true)
+          if [ -z "$CODE_CHANGED" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Only markdown changes — skipping doc update"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "Code changes detected — will update docs"
+          fi
+
+      - name: Skip if last commit was from docs-bot
+        id: check_bot
+        if: steps.check.outputs.skip != 'true'
+        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        run: |
+          LAST_MSG=$(git log -1 --pretty=%s)
+          if echo "$LAST_MSG" | grep -q "\[docs-bot\]"; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Last commit was from docs-bot — skipping to avoid loop"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
+        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        run: pip install anthropic
+
+      - name: Run documentation updater
+        if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
+        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m scripts.update_docs
+
+      - name: Commit and push README/CLAUDE.md changes
+        if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
+        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        run: |
+          # Check if any tracked docs changed
+          git diff --quiet -- '*.md' && {
+            echo "No documentation changes to commit"
+            exit 0
+          }
+
+          # Stage only markdown files (READMEs + CLAUDE.md)
+          git add -- '*.md'
+
+          # Commit with [docs-bot] tag so we can detect and skip on next run
+          git commit -m "[docs-bot] Auto-update documentation from code changes"
+
+          # Push back to main
+          git push origin main

@@ -78,6 +78,10 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("pause", self.cmd_pause))
         self.app.add_handler(CommandHandler("resume", self.cmd_resume))
         self.app.add_handler(CommandHandler("datastatus", self.cmd_datastatus))
+        self.app.add_handler(CommandHandler("accuracy", self.cmd_accuracy))
+        self.app.add_handler(CommandHandler("model", self.cmd_model))
+        self.app.add_handler(CommandHandler("drift", self.cmd_drift))
+        self.app.add_handler(CommandHandler("performance", self.cmd_performance))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
 
         return self.app
@@ -101,6 +105,10 @@ class TelegramChatHandler:
             "*/resume* — Resume trading after a pause\n"
             "*/stats* — All-time performance stats\n"
             "*/datastatus* — Check IG vs yfinance status per pair\n"
+            "*/accuracy* — LSTM prediction accuracy (7d)\n"
+            "*/model* — Current LSTM model info and last retrain\n"
+            "*/drift* — Model drift detection status\n"
+            "*/performance* — LSTM performance metrics\n"
             "*/fallbacktest* — Test yfinance backup data source\n"
             "*/query* `<question>` — Query trade database in plain English\n"
             "*/devops* — Today's code changes (git log)\n"
@@ -220,6 +228,158 @@ class TelegramChatHandler:
         except Exception as e:
             logger.error(f"Data status command failed: {e}")
             await update.message.reply_text(f"⚠️ Could not fetch data source status: {str(e)[:200]}")
+
+    # ── Analytics Commands (Phase 3) ──────────────────────────────────────────
+
+    async def cmd_accuracy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show rolling LSTM prediction accuracy."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get("http://mcp-server:8090/analytics/accuracy?window=7d")
+                data = r.json()
+
+            overall = data.get("overall", {})
+            acc = overall.get("accuracy", 0)
+            total = overall.get("total", 0)
+            emoji = "✅" if acc >= 50 else "⚠️"
+
+            message = (
+                f"*{emoji} LSTM PREDICTION ACCURACY*\n"
+                f"─────────────────────────────\n"
+                f"*Last 7 Days:* {acc}% ({total} predictions resolved)\n"
+                f"*BUY accuracy:* {overall.get('buy_accuracy', 0)}%\n"
+                f"*SELL accuracy:* {overall.get('sell_accuracy', 0)}%\n"
+            )
+
+            by_pair = data.get("by_pair", {})
+            if by_pair:
+                message += "\n*By Pair (7d):*\n"
+                for pair, pair_acc in by_pair.items():
+                    if pair_acc.get("total", 0) > 0:
+                        p = pair.replace("_", "/")
+                        message += f"  {p}: {pair_acc['accuracy']}% ({pair_acc['total']} predictions)\n"
+
+            message += f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Accuracy command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch accuracy: {str(e)[:200]}")
+
+    async def cmd_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show current LSTM model info and last retrain details."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get("http://mcp-server:8090/analytics/model")
+                data = r.json()
+
+            model = data.get("current_model", {})
+            if not model:
+                await update.message.reply_text("No model training data yet.")
+                return
+
+            message = (
+                f"*🧠 LSTM MODEL INFO*\n"
+                f"─────────────────────────────\n"
+                f"*Version:* {model.get('model_version', '?')}\n"
+                f"*Last trained:* {(model.get('timestamp') or '?')[:16]}\n"
+                f"*Val accuracy:* {(model.get('val_accuracy') or 0) * 100:.1f}%\n"
+                f"*Val loss:* {model.get('val_loss', '?')}\n"
+                f"*Train accuracy:* {(model.get('train_accuracy') or 0) * 100:.1f}%\n"
+                f"*Epochs:* {model.get('epochs_trained', '?')}\n"
+                f"*Features:* {model.get('feature_count', '?')}\n"
+                f"*Architecture:* {model.get('num_layers', '?')} layers, {model.get('hidden_size', '?')} hidden\n"
+                f"*Training time:* {model.get('training_duration_seconds', '?')}s\n"
+                f"*Samples:* {model.get('train_samples', '?')} train, {model.get('val_samples', '?')} val\n"
+            )
+
+            message += f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Model command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch model info: {str(e)[:200]}")
+
+    async def cmd_drift(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show model drift detection status."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get("http://mcp-server:8090/analytics/drift")
+                data = r.json()
+
+            status = data.get("status", "unknown")
+            emoji = {"ok": "✅", "drift": "⚠️", "insufficient_data": "📊"}.get(status, "❓")
+
+            message = (
+                f"*{emoji} MODEL DRIFT STATUS*\n"
+                f"─────────────────────────────\n"
+                f"*Status:* {status.upper()}\n"
+                f"*Training accuracy:* {data.get('training_accuracy', 0):.1f}%\n"
+                f"*Live accuracy (24h):* {data.get('rolling_accuracy_24h', 0):.1f}%\n"
+                f"*Live accuracy (7d):* {data.get('rolling_accuracy_7d', 0):.1f}%\n"
+                f"*Drift delta:* {data.get('drift_delta', 0):.1f}%\n"
+                f"*Predictions resolved (24h):* {data.get('predictions_resolved_24h', 0)}\n\n"
+                f"_{data.get('message', '')}_\n"
+            )
+
+            message += f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Drift command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch drift status: {str(e)[:200]}")
+
+    async def cmd_performance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show key LSTM performance metrics."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get("http://mcp-server:8090/analytics/performance?window=7d")
+                data = r.json()
+
+            acc = data.get("accuracy", {})
+            edge = data.get("lstm_edge")
+            trend = data.get("accuracy_trend")
+            agreement = data.get("lstm_indicator_agreement")
+
+            message = (
+                f"*📊 LSTM PERFORMANCE (7d)*\n"
+                f"─────────────────────────────\n"
+                f"*Prediction accuracy:* {acc.get('accuracy', 0)}% ({acc.get('total', 0)} resolved)\n"
+            )
+
+            if edge is not None:
+                edge_emoji = "📈" if edge > 0 else "📉"
+                message += f"*LSTM edge:* {edge:+.1f}pp {edge_emoji}\n"
+
+            if agreement is not None:
+                message += f"*LSTM-indicator agreement:* {agreement:.0f}%\n"
+
+            if trend is not None:
+                trend_emoji = "📈" if trend > 0 else "📉" if trend < 0 else "➡️"
+                message += f"*Week-over-week trend:* {trend:+.1f}% {trend_emoji}\n"
+
+            message += f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Performance command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch performance: {str(e)[:200]}")
 
     async def cmd_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Query the SQLite trade database using natural language.

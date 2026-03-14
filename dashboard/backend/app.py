@@ -85,8 +85,10 @@ EMPTY_OVERVIEW = {
 @contextmanager
 def get_db():
     """Context manager for read-only SQLite access.
-    Uses WAL mode so reads don't block the trading bot's writes."""
-    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    Uses immutable=1 because the volume is mounted read-only (:ro) —
+    SQLite can't create WAL/journal files without directory write access.
+    This is safe because the dashboard only reads, never writes."""
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro&immutable=1", uri=True)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -195,11 +197,11 @@ async def get_overview():
                 (today,)
             ).fetchall()
 
-            # Calculate today's P&L
+            # Calculate today's P&L — DB column is 'pl' not 'profit_loss'
             closed_today = [t for t in trades_today if t["closed_at"] is not None]
-            today_pl = sum(t["profit_loss"] for t in closed_today if t["profit_loss"])
-            wins = sum(1 for t in closed_today if t["profit_loss"] and t["profit_loss"] > 0)
-            losses = sum(1 for t in closed_today if t["profit_loss"] and t["profit_loss"] <= 0)
+            today_pl = sum(t["pl"] for t in closed_today if t["pl"])
+            wins = sum(1 for t in closed_today if t["pl"] and t["pl"] > 0)
+            losses = sum(1 for t in closed_today if t["pl"] and t["pl"] <= 0)
 
             # Open positions
             open_positions = db.execute(
@@ -208,8 +210,8 @@ async def get_overview():
 
             # All-time stats
             all_closed = db.execute(
-                "SELECT COUNT(*) as total, SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins, "
-                "SUM(profit_loss) as total_pl FROM trades WHERE closed_at IS NOT NULL"
+                "SELECT COUNT(*) as total, SUM(CASE WHEN pl > 0 THEN 1 ELSE 0 END) as wins, "
+                "SUM(pl) as total_pl FROM trades WHERE closed_at IS NOT NULL"
             ).fetchone()
     except Exception as e:
         logger.error(f"Database error in overview: {e}")
@@ -350,7 +352,7 @@ async def get_pl_history(days: int = 30):
         with get_db() as db:
             rows = db.execute(
                 """SELECT date(closed_at) as date,
-                          SUM(profit_loss) as daily_pl,
+                          SUM(pl) as daily_pl,
                           COUNT(*) as trades
                    FROM trades
                    WHERE closed_at IS NOT NULL

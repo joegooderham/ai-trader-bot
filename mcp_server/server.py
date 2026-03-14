@@ -219,6 +219,138 @@ async def get_daily_learning(date: str = None):
     return JSONResponse(content=learning)
 
 
+# ── Analytics API Endpoints (Phase 3) ─────────────────────────────────────────
+# These serve both Telegram commands now and the future React dashboard (GH#8).
+
+@app.get("/analytics/model")
+async def analytics_model():
+    """Current model stats: version, last trained, accuracy, architecture."""
+    from data.storage import TradeStorage
+    storage = TradeStorage()
+    metrics = storage.get_latest_model_metrics()
+    history = storage.get_model_history(limit=5)
+
+    return JSONResponse(content={
+        "current_model": metrics,
+        "recent_history": history,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/analytics/predictions")
+async def analytics_predictions(pair: str = None, hours: int = 24):
+    """Recent prediction log with outcomes."""
+    from data.storage import TradeStorage
+    storage = TradeStorage()
+    predictions = storage.get_recent_predictions(limit=100)
+
+    # Filter by pair if specified
+    if pair:
+        predictions = [p for p in predictions if p.get("pair") == pair]
+
+    return JSONResponse(content={
+        "predictions": predictions,
+        "count": len(predictions),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/analytics/accuracy")
+async def analytics_accuracy(window: str = "7d", pair: str = None):
+    """Rolling prediction accuracy by pair, direction."""
+    from data.storage import TradeStorage
+    storage = TradeStorage()
+
+    # Map window string to hours
+    window_hours = {"24h": 24, "7d": 168, "30d": 720}.get(window, 168)
+
+    overall = storage.get_prediction_accuracy(hours=window_hours, pair=pair)
+
+    # Per-pair breakdown if no specific pair requested
+    pair_breakdown = {}
+    if not pair:
+        for p in config.PAIRS:
+            pair_breakdown[p] = storage.get_prediction_accuracy(hours=window_hours, pair=p)
+
+    return JSONResponse(content={
+        "window": window,
+        "overall": overall,
+        "by_pair": pair_breakdown,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/analytics/drift")
+async def analytics_drift():
+    """Current drift status from the last check."""
+    from bot.engine.lstm.drift import DriftDetector
+    detector = DriftDetector()
+    result = detector.check()
+
+    return JSONResponse(content=result)
+
+
+@app.get("/analytics/performance")
+async def analytics_performance(window: str = "7d"):
+    """Key performance metrics: LSTM edge, accuracy trend, calibration."""
+    from data.storage import TradeStorage
+    storage = TradeStorage()
+
+    window_hours = {"24h": 24, "7d": 168, "30d": 720}.get(window, 168)
+
+    accuracy = storage.get_prediction_accuracy(hours=window_hours)
+    lstm_edge = storage.get_analytics("lstm_edge_avg", hours=window_hours)
+    trend = storage.get_analytics("accuracy_trend_weekly", hours=window_hours)
+    agreement = storage.get_analytics("lstm_indicator_agreement", hours=window_hours)
+
+    return JSONResponse(content={
+        "window": window,
+        "accuracy": accuracy,
+        "lstm_edge": lstm_edge[-1]["metric_value"] if lstm_edge else None,
+        "accuracy_trend": trend[-1]["metric_value"] if trend else None,
+        "lstm_indicator_agreement": agreement[-1]["metric_value"] if agreement else None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/analytics/summary")
+async def analytics_summary():
+    """Single endpoint aggregating all analytics for dashboard overview."""
+    from data.storage import TradeStorage
+    from bot.engine.lstm.drift import DriftDetector
+    storage = TradeStorage()
+    detector = DriftDetector()
+
+    model = storage.get_latest_model_metrics()
+    acc_24h = storage.get_prediction_accuracy(hours=24)
+    acc_7d = storage.get_prediction_accuracy(hours=168)
+    drift = detector.check()
+
+    # Latest LSTM edge
+    edge_data = storage.get_analytics("lstm_edge_avg", hours=24)
+    lstm_edge = edge_data[-1]["metric_value"] if edge_data else None
+
+    return JSONResponse(content={
+        "model": {
+            "version": model.get("model_version") if model else None,
+            "val_accuracy": model.get("val_accuracy") if model else None,
+            "last_trained": model.get("timestamp") if model else None,
+            "feature_count": model.get("feature_count") if model else None,
+            "hidden_size": model.get("hidden_size") if model else None,
+        },
+        "accuracy": {
+            "24h": acc_24h,
+            "7d": acc_7d,
+        },
+        "drift": {
+            "status": drift["status"],
+            "delta": drift.get("drift_delta", 0),
+        },
+        "lstm_edge": lstm_edge,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
 async def _ask_claude_for_weekly_outlook(economic_events: list, sentiment_data: dict) -> str:
     """
     Use Claude AI to write an intelligent weekly market outlook.

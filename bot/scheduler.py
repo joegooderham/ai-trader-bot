@@ -38,6 +38,8 @@ from data.storage import TradeStorage
 from data.context_writer import ContextWriter
 from bot.instance import InstanceManager
 from bot.engine.lstm import LSTMPredictor
+from bot.engine.lstm.drift import DriftDetector
+from bot.analytics.metrics import MetricsEngine
 from broker.ig_streaming import IGStreamingClient
 import httpx
 
@@ -63,6 +65,10 @@ lstm_predictor = LSTMPredictor() if config.LSTM_ENABLED else None
 
 # Real-time position streaming via IG Lightstreamer (BACKLOG-004 / GH#6)
 streaming_client = IGStreamingClient(broker)
+
+# Analytics — drift detection and metrics computation (Phase 2)
+drift_detector = DriftDetector()
+metrics_engine = MetricsEngine()
 
 # Track last reported P&L per position to only alert on significant changes
 _last_reported_pl: dict = {}
@@ -336,6 +342,20 @@ def _evaluate_pair(pair: str, available_capital: float):
             f"Delta: {diff_str}pp | LSTM pred: {ml_prediction}"
         )
 
+        # Log prediction to SQLite for accuracy tracking (Phase 2)
+        try:
+            storage.save_prediction({
+                "pair": pair,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "predicted_direction": ml_prediction["direction"],
+                "predicted_probability": ml_prediction["probability"],
+                "confidence_score": lstm_result.score,
+                "indicator_only_score": indicator_result.score,
+                "model_version": None,
+            })
+        except Exception as e:
+            logger.debug(f"Failed to save prediction: {e}")
+
         # Use indicator-only result for actual trade decisions until shadow mode is off
         result = indicator_result
     else:
@@ -344,6 +364,21 @@ def _evaluate_pair(pair: str, available_capital: float):
             pair=pair, indicators=ind, mcp_context=mcp_context,
             ml_prediction=ml_prediction, mtf_context=mtf_context
         )
+
+        # Log LSTM prediction when not in shadow mode (Phase 2)
+        if ml_prediction:
+            try:
+                storage.save_prediction({
+                    "pair": pair,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "predicted_direction": ml_prediction["direction"],
+                    "predicted_probability": ml_prediction["probability"],
+                    "confidence_score": result.score,
+                    "indicator_only_score": None,
+                    "model_version": None,
+                })
+            except Exception as e:
+                logger.debug(f"Failed to save prediction: {e}")
 
     # BACKLOG-006: Apply session-aware minimum confidence
     # During quiet sessions the bar is raised, during peak sessions it can be lowered
@@ -725,6 +760,12 @@ def retrain_lstm():
         if lstm_predictor:
             lstm_predictor.reload()
 
+        # Persist training metrics to SQLite for drift detection and dashboards (Phase 2)
+        try:
+            storage.save_model_metrics(metrics)
+        except Exception as e:
+            logger.debug(f"Failed to save model metrics: {e}")
+
         duration = metrics.get("training_duration_human", "?")
         notifier._send(
             f"🧠 *LSTM Model Retrained* ({duration})\n"
@@ -742,6 +783,106 @@ def retrain_lstm():
     finally:
         _retrain_running = False
         _retrain_lock.release()
+
+
+def resolve_prediction_outcomes():
+    """
+    Check unresolved predictions against subsequent candle data to determine
+    if the LSTM prediction was correct. Runs hourly.
+
+    Uses the same logic as the labelling function: looks ahead 3 candles and
+    checks if price moved >= 1 ATR in the predicted direction.
+    """
+    unresolved = storage.get_unresolved_predictions(max_age_hours=24)
+    if not unresolved:
+        return
+
+    resolved_count = 0
+    for pred in unresolved:
+        try:
+            pair = pred["pair"]
+            pred_time = pred["timestamp"]
+            pred_direction = pred["predicted_direction"]
+
+            # Get candles since the prediction was made
+            candles = storage.get_candles(pair, config.TIMEFRAME, count=100)
+            if candles is None or len(candles) < 5:
+                continue
+
+            # Find the candle at or after the prediction time
+            import pandas as pd
+            pred_dt = pd.to_datetime(pred_time, utc=True)
+            future = candles[candles.index > pred_dt]
+
+            # Need at least 3 candles after the prediction to evaluate
+            if len(future) < 3:
+                continue
+
+            close_at_pred = candles.loc[candles.index <= pred_dt].iloc[-1]["close"] if len(candles[candles.index <= pred_dt]) > 0 else None
+            if close_at_pred is None:
+                continue
+
+            # Check the 3 candles after prediction
+            look = future.iloc[:3]
+            max_high = look["high"].max()
+            min_low = look["low"].min()
+
+            upside_pips = max_high - close_at_pred
+            downside_pips = close_at_pred - min_low
+
+            # Determine actual direction based on which move was larger
+            if upside_pips > downside_pips:
+                actual_direction = "BUY"
+                actual_pips = upside_pips
+            elif downside_pips > upside_pips:
+                actual_direction = "SELL"
+                actual_pips = downside_pips
+            else:
+                actual_direction = "HOLD"
+                actual_pips = 0
+
+            was_correct = (pred_direction == actual_direction)
+            storage.update_prediction_outcome(
+                pred["id"], actual_direction, round(actual_pips, 5), was_correct
+            )
+            resolved_count += 1
+
+        except Exception as e:
+            logger.debug(f"Failed to resolve prediction {pred.get('id')}: {e}")
+
+    if resolved_count > 0:
+        logger.info(f"Resolved {resolved_count}/{len(unresolved)} prediction outcomes")
+
+
+def check_drift():
+    """
+    Run drift detection — checks if LSTM accuracy has degraded.
+    If drift is detected, triggers an early retrain and sends Telegram alert.
+    Runs every 30 minutes.
+    """
+    result = drift_detector.check()
+
+    if result["status"] == "drift":
+        notifier._send(
+            f"⚠️ *Model Drift Detected*\n"
+            f"─────────────────────────────\n"
+            f"Live accuracy: {result['rolling_accuracy_24h']:.1f}%\n"
+            f"Training accuracy: {result['training_accuracy']:.1f}%\n"
+            f"Delta: {result['drift_delta']:.1f}%\n\n"
+            f"Triggering early retrain..."
+        )
+        # Trigger early retrain in a background thread
+        threading.Thread(target=retrain_lstm, daemon=True).start()
+    elif result["status"] == "ok":
+        logger.debug(f"Drift check OK: {result['message']}")
+
+
+def compute_analytics():
+    """Compute and store rolling analytics metrics. Runs hourly."""
+    try:
+        metrics_engine.compute_all()
+    except Exception as e:
+        logger.error(f"Analytics computation failed: {e}")
 
 
 def _get_mcp_context(pair: str) -> dict:
@@ -832,6 +973,28 @@ def main():
             id="lstm_retrain",
             name=f"LSTM Retrain (every {config.LSTM_RETRAIN_INTERVAL_MIN}min)"
         )
+
+    # ── Analytics Jobs (Phase 2) ─────────────────────────────────────────────
+    # Resolve prediction outcomes by checking subsequent candle data
+    scheduler.add_job(
+        resolve_prediction_outcomes,
+        "interval", minutes=60,
+        id="resolve_predictions", name="Resolve Prediction Outcomes"
+    )
+
+    # Drift detection — checks if model accuracy has degraded
+    scheduler.add_job(
+        check_drift,
+        "interval", minutes=30,
+        id="drift_check", name="Model Drift Check"
+    )
+
+    # Compute rolling analytics metrics for dashboards and Telegram
+    scheduler.add_job(
+        compute_analytics,
+        "interval", minutes=60,
+        id="analytics", name="Analytics Metrics"
+    )
 
     logger.info("📅 Scheduler started with the following jobs:")
     for job in scheduler.get_jobs():

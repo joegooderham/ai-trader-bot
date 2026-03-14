@@ -108,6 +108,68 @@ def _init_db():
 
             CREATE INDEX IF NOT EXISTS idx_candles_lookup
                 ON candles(pair, timeframe, timestamp);
+
+            -- ── Analytics Tables (Phase 2) ──────────────────────────────────
+            -- Every LSTM prediction is logged here with outcome tracking.
+            -- Predictions that lead to trades are linked via trade_id.
+            -- The outcome columns (actual_direction, actual_pips, was_correct)
+            -- are populated later by the outcome resolver once enough candles exist.
+            CREATE TABLE IF NOT EXISTS predictions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pair TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                predicted_direction TEXT NOT NULL,
+                predicted_probability REAL NOT NULL,
+                confidence_score REAL,
+                indicator_only_score REAL,
+                actual_direction TEXT,
+                actual_pips REAL,
+                was_correct INTEGER,
+                trade_id TEXT,
+                model_version TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_predictions_pair_ts
+                ON predictions(pair, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_predictions_created
+                ON predictions(created_at);
+
+            -- Snapshot of model metrics after each retrain cycle.
+            -- Used for drift detection (comparing live accuracy vs training accuracy).
+            CREATE TABLE IF NOT EXISTS model_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                model_version TEXT,
+                val_accuracy REAL,
+                val_loss REAL,
+                train_accuracy REAL,
+                train_samples INTEGER,
+                val_samples INTEGER,
+                epochs_trained INTEGER,
+                training_duration_seconds REAL,
+                feature_count INTEGER,
+                hidden_size INTEGER,
+                num_layers INTEGER,
+                data_period TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            -- Rolling performance snapshots computed periodically.
+            -- Stores named metrics (e.g. "rolling_accuracy_24h") with pair
+            -- and window context. Queried by API endpoints and Telegram commands.
+            CREATE TABLE IF NOT EXISTS analytics_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                metric_name TEXT NOT NULL,
+                metric_value REAL NOT NULL,
+                pair TEXT,
+                window TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_analytics_metric
+                ON analytics_snapshots(metric_name, timestamp);
         """)
         conn.commit()
     finally:
@@ -408,6 +470,220 @@ class TradeStorage:
             if row and row["latest"]:
                 return pd.to_datetime(row["latest"], utc=True).to_pydatetime()
             return None
+        finally:
+            conn.close()
+
+    # ── Prediction Tracking (Phase 2) ────────────────────────────────────────
+
+    def save_prediction(self, prediction: dict) -> int:
+        """
+        Log an LSTM prediction for later accuracy tracking.
+        Called every scan for every pair that gets an LSTM prediction.
+        Returns the prediction row id.
+        """
+        conn = _get_connection()
+        try:
+            cursor = conn.execute("""
+                INSERT INTO predictions
+                (pair, timestamp, predicted_direction, predicted_probability,
+                 confidence_score, indicator_only_score, trade_id, model_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                prediction.get("pair"),
+                prediction.get("timestamp"),
+                prediction.get("predicted_direction"),
+                prediction.get("predicted_probability"),
+                prediction.get("confidence_score"),
+                prediction.get("indicator_only_score"),
+                prediction.get("trade_id"),
+                prediction.get("model_version"),
+            ))
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def update_prediction_outcome(self, prediction_id: int, actual_direction: str,
+                                   actual_pips: float, was_correct: bool):
+        """Update a prediction with the actual outcome once we have enough future candles."""
+        conn = _get_connection()
+        try:
+            conn.execute("""
+                UPDATE predictions
+                SET actual_direction = ?, actual_pips = ?, was_correct = ?
+                WHERE id = ?
+            """, (actual_direction, actual_pips, 1 if was_correct else 0, prediction_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_unresolved_predictions(self, max_age_hours: int = 24) -> list:
+        """
+        Get predictions that haven't had their outcome resolved yet.
+        Only looks back max_age_hours to avoid processing ancient predictions.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        conn = _get_connection()
+        try:
+            rows = conn.execute("""
+                SELECT id, pair, timestamp, predicted_direction
+                FROM predictions
+                WHERE was_correct IS NULL AND created_at >= ?
+                ORDER BY created_at
+            """, (cutoff,)).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_prediction_accuracy(self, hours: int = None, pair: str = None) -> dict:
+        """
+        Calculate prediction accuracy over a time window.
+        Returns overall and per-direction accuracy.
+        """
+        conn = _get_connection()
+        try:
+            where = ["was_correct IS NOT NULL"]
+            params = []
+            if hours:
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+                where.append("created_at >= ?")
+                params.append(cutoff)
+            if pair:
+                where.append("pair = ?")
+                params.append(pair)
+
+            where_clause = " AND ".join(where)
+
+            row = conn.execute(f"""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(was_correct) as correct,
+                    SUM(CASE WHEN predicted_direction = 'BUY' THEN 1 ELSE 0 END) as buy_total,
+                    SUM(CASE WHEN predicted_direction = 'BUY' AND was_correct = 1 THEN 1 ELSE 0 END) as buy_correct,
+                    SUM(CASE WHEN predicted_direction = 'SELL' THEN 1 ELSE 0 END) as sell_total,
+                    SUM(CASE WHEN predicted_direction = 'SELL' AND was_correct = 1 THEN 1 ELSE 0 END) as sell_correct
+                FROM predictions WHERE {where_clause}
+            """, params).fetchone()
+
+            if not row or row["total"] == 0:
+                return {"total": 0, "accuracy": 0, "message": "No resolved predictions"}
+
+            total = row["total"]
+            correct = row["correct"] or 0
+            return {
+                "total": total,
+                "correct": correct,
+                "accuracy": round(correct / total * 100, 1),
+                "buy_accuracy": round((row["buy_correct"] or 0) / row["buy_total"] * 100, 1) if row["buy_total"] else 0,
+                "sell_accuracy": round((row["sell_correct"] or 0) / row["sell_total"] * 100, 1) if row["sell_total"] else 0,
+            }
+        finally:
+            conn.close()
+
+    def get_recent_predictions(self, limit: int = 50) -> list:
+        """Get the most recent predictions with outcomes."""
+        conn = _get_connection()
+        try:
+            rows = conn.execute("""
+                SELECT * FROM predictions
+                ORDER BY created_at DESC LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    # ── Model Metrics (Phase 2) ──────────────────────────────────────────────
+
+    def save_model_metrics(self, metrics: dict):
+        """Save a snapshot of model training metrics after each retrain."""
+        conn = _get_connection()
+        try:
+            conn.execute("""
+                INSERT INTO model_metrics
+                (timestamp, model_version, val_accuracy, val_loss, train_accuracy,
+                 train_samples, val_samples, epochs_trained, training_duration_seconds,
+                 feature_count, hidden_size, num_layers, data_period)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now(timezone.utc).isoformat(),
+                metrics.get("model_version"),
+                metrics.get("val_accuracy"),
+                metrics.get("best_val_loss"),
+                metrics.get("train_accuracy"),
+                metrics.get("train_samples"),
+                metrics.get("val_samples"),
+                metrics.get("epochs_trained"),
+                metrics.get("training_duration_seconds"),
+                metrics.get("num_features"),
+                metrics.get("hidden_size"),
+                metrics.get("num_layers"),
+                metrics.get("extended_period"),
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_latest_model_metrics(self) -> dict:
+        """Get metrics from the most recent training run."""
+        conn = _get_connection()
+        try:
+            row = conn.execute(
+                "SELECT * FROM model_metrics ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else {}
+        finally:
+            conn.close()
+
+    def get_model_history(self, limit: int = 10) -> list:
+        """Get training history — used for drift detection and dashboards."""
+        conn = _get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM model_metrics ORDER BY timestamp DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    # ── Analytics Snapshots (Phase 2) ─────────────────────────────────────────
+
+    def save_analytics_snapshot(self, metric_name: str, value: float,
+                                 pair: str = None, window: str = None):
+        """Save a computed analytics metric."""
+        conn = _get_connection()
+        try:
+            conn.execute("""
+                INSERT INTO analytics_snapshots
+                (timestamp, metric_name, metric_value, pair, window)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                datetime.now(timezone.utc).isoformat(),
+                metric_name, value, pair, window,
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_analytics(self, metric_name: str, hours: int = 24,
+                       pair: str = None) -> list:
+        """Get time series of a specific metric."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        conn = _get_connection()
+        try:
+            where = ["metric_name = ?", "timestamp >= ?"]
+            params = [metric_name, cutoff]
+            if pair:
+                where.append("pair = ?")
+                params.append(pair)
+
+            rows = conn.execute(f"""
+                SELECT timestamp, metric_value, pair, window
+                FROM analytics_snapshots
+                WHERE {" AND ".join(where)}
+                ORDER BY timestamp
+            """, params).fetchall()
+            return [dict(r) for r in rows]
         finally:
             conn.close()
 

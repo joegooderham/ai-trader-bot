@@ -63,8 +63,17 @@ class LSTMPredictor:
             return
 
         try:
-            # Rebuild model architecture and load saved weights
-            self.model = ForexLSTM(input_size=NUM_FEATURES)
+            # Rebuild model architecture matching the trainer's config
+            hidden_size = config._cfg.get("lstm", {}).get("hidden_size", 96)
+            num_layers = config._cfg.get("lstm", {}).get("num_layers", 2)
+            dropout = config._cfg.get("lstm", {}).get("dropout", 0.3)
+
+            self.model = ForexLSTM(
+                input_size=NUM_FEATURES,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                dropout=dropout,
+            )
             state_dict = torch.load(str(MODEL_PATH), map_location="cpu", weights_only=True)
             self.model.load_state_dict(state_dict)
             self.model.eval()  # Set to inference mode (disables dropout)

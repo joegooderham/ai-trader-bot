@@ -210,10 +210,18 @@ lstm:
   # and the LSTM score will drive real trade decisions (50% weight).
   shadow_mode: true
 
+  # ── Model Architecture ────────────────────────────────────────────────────
+  # Two-layer LSTM with self-attention. Bigger hidden_size and more layers
+  # capture more complex patterns but train slower. These defaults (~100k params)
+  # still train in under 3 minutes on CPU.
+  hidden_size: 96               # LSTM hidden units per layer (was 64, increased for attention)
+  num_layers: 2                 # LSTM layers (2 = captures longer-term patterns)
+  dropout: 0.3                  # Regularisation dropout rate (between layers + before classifier)
+
   # Training hyperparameters — tuned for forex H1 data
   epochs: 50                    # Max training epochs (early stopping usually kicks in sooner)
   batch_size: 64                # Samples per gradient update
-  learning_rate: 0.001          # Adam optimizer learning rate
+  learning_rate: 0.001          # Adam optimizer learning rate (halved automatically on plateau)
   patience: 7                   # Stop if val loss doesn't improve for this many epochs
 
 data:

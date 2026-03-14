@@ -1,21 +1,27 @@
 """
 bot/engine/lstm/features.py — Feature Engineering for LSTM
 ────────────────────────────────────────────────────────────
-Transforms raw OHLCV candle data into 12 normalised features per timestep.
+Transforms raw OHLCV candle data into 18 normalised features per timestep.
 
 Features (per candle):
-  1. close_pct_change  — % change from previous close
-  2. range_norm        — (high - low) / ATR
-  3. body_norm         — (close - open) / ATR
-  4. volume_rel        — volume / 20-period mean volume
-  5. rsi_norm          — RSI(14) scaled to 0-1
-  6. macd_hist_norm    — MACD histogram / close price
-  7. bb_percent_b      — Bollinger %B (0-1 range)
-  8. ema20_dist        — % distance of close from EMA(20)
-  9. ema50_dist        — % distance of close from EMA(50)
-  10. atr_norm         — ATR(14) / close price
-  11. hour_sin         — sin(2π * hour / 24) cyclical encoding
-  12. hour_cos         — cos(2π * hour / 24) cyclical encoding
+  1.  close_pct_change   — % change from previous close
+  2.  range_norm         — (high - low) / ATR
+  3.  body_norm          — (close - open) / ATR
+  4.  volume_rel         — volume / 20-period mean volume
+  5.  rsi_norm           — RSI(14) scaled to 0-1
+  6.  macd_hist_norm     — MACD histogram / close price
+  7.  bb_percent_b       — Bollinger %B (0-1 range)
+  8.  ema20_dist         — % distance of close from EMA(20)
+  9.  ema50_dist         — % distance of close from EMA(50)
+  10. atr_norm           — ATR(14) / close price
+  11. hour_sin           — sin(2π * hour / 24) cyclical encoding
+  12. hour_cos           — cos(2π * hour / 24) cyclical encoding
+  13. day_sin            — sin(2π * weekday / 5) cyclical day encoding
+  14. day_cos            — cos(2π * weekday / 5) cyclical day encoding
+  15. rsi_roc            — RSI momentum (current - 3 periods ago)
+  16. macd_signal_dist   — distance between MACD and signal line / close
+  17. close_vs_range     — where close sits in candle range (0=low, 1=high)
+  18. ema_cross_momentum — rate of change of EMA20-EMA50 gap over 5 periods
 """
 
 import numpy as np
@@ -23,7 +29,7 @@ import pandas as pd
 import ta
 from loguru import logger
 
-NUM_FEATURES = 12
+NUM_FEATURES = 18
 SEQUENCE_LENGTH = 30
 
 
@@ -51,7 +57,10 @@ def build_features(df: pd.DataFrame) -> np.ndarray:
 
     # Technical indicators
     rsi = ta.momentum.RSIIndicator(close, window=14).rsi()
-    macd_hist = ta.trend.MACD(close, window_fast=12, window_slow=26, window_sign=9).macd_diff()
+    macd_obj = ta.trend.MACD(close, window_fast=12, window_slow=26, window_sign=9)
+    macd_hist = macd_obj.macd_diff()
+    macd_line = macd_obj.macd()
+    macd_signal = macd_obj.macd_signal()
     bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
     bb_pctb = bb.bollinger_pband()  # %B: (close - lower) / (upper - lower)
     ema20 = ta.trend.EMAIndicator(close, window=20).ema_indicator()
@@ -61,13 +70,25 @@ def build_features(df: pd.DataFrame) -> np.ndarray:
     # Rolling volume mean
     vol_mean = volume.rolling(window=20).mean()
 
-    # Hour encoding from index
+    # Derived signals for new features
+    # RSI rate of change — captures RSI momentum/divergence over 3 periods
+    rsi_roc = (rsi - rsi.shift(3)) / 100.0
+
+    # EMA cross momentum — how fast the EMA20-EMA50 gap is changing
+    # Positive = trend accelerating, negative = trend decelerating
+    ema_gap = (ema20 - ema50) / close.replace(0, np.nan)
+    ema_cross_mom = ema_gap - ema_gap.shift(5)
+
+    # Hour and day-of-week encoding from index
     try:
-        hours = pd.to_datetime(df.index).hour
+        dt_index = pd.to_datetime(df.index)
+        hours = dt_index.hour
+        weekdays = dt_index.weekday  # Mon=0 to Fri=4
     except Exception:
         hours = pd.Series(np.zeros(len(df)), index=df.index)
+        weekdays = pd.Series(np.zeros(len(df)), index=df.index)
 
-    # Build feature columns
+    # Build feature columns — original 12 features
     features = pd.DataFrame(index=df.index)
     features["close_pct"] = close.pct_change()
     features["range_norm"] = (high - low) / atr.replace(0, np.nan)
@@ -81,6 +102,20 @@ def build_features(df: pd.DataFrame) -> np.ndarray:
     features["atr_norm"] = atr / close.replace(0, np.nan)
     features["hour_sin"] = np.sin(2 * np.pi * hours / 24)
     features["hour_cos"] = np.cos(2 * np.pi * hours / 24)
+
+    # New features (13-18) — added for Phase 1 LSTM optimisation
+    # Day-of-week encoding: forex pairs behave differently Mon vs Fri
+    features["day_sin"] = np.sin(2 * np.pi * weekdays / 5)
+    features["day_cos"] = np.cos(2 * np.pi * weekdays / 5)
+    # RSI momentum: catches divergences that raw RSI misses
+    features["rsi_roc"] = rsi_roc
+    # MACD-signal distance: more granular than binary histogram sign
+    features["macd_signal_dist"] = (macd_line - macd_signal) / close.replace(0, np.nan)
+    # Close position within candle range: 1.0 = bullish, 0.0 = bearish
+    candle_range = (high - low).replace(0, np.nan)
+    features["close_vs_range"] = (close - low) / candle_range
+    # EMA cross momentum: trend acceleration/deceleration
+    features["ema_cross_momentum"] = ema_cross_mom
 
     # Drop NaN rows (from indicator warm-up periods)
     features = features.dropna()

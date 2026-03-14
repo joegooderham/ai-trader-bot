@@ -26,16 +26,32 @@ from bot import config
 
 
 class TelegramNotifier:
-    """Sends formatted messages to your Telegram account."""
+    """Sends formatted messages to your Telegram account.
+
+    Two bot tokens are used to separate concerns:
+      - Trading bot: trade opens/closes, daily/weekly reports, overnight holds,
+        LSTM retrain results, trailing stop updates
+      - System bot: health alerts, recovery messages, data source fallbacks,
+        startup/shutdown, dev activity, drift alerts, circuit breaker
+    """
 
     def __init__(self):
         self.token = config.TELEGRAM_BOT_TOKEN
+        self.sys_token = config.TELEGRAM_BOT_SYS_TOKEN
         self.chat_id = config.TELEGRAM_CHAT_ID
         # Timestamp of last send — used to rate-limit and avoid pool exhaustion
         self._last_send_time = 0.0
 
     def _send(self, message: str):
-        """Send a message (sync wrapper around async Telegram library).
+        """Send a TRADING message via the trading bot."""
+        self._do_send(message, self.token)
+
+    def _send_system(self, message: str):
+        """Send a SYSTEM/OPS message via the system bot."""
+        self._do_send(message, self.sys_token)
+
+    def _do_send(self, message: str, token: str):
+        """Send a message using the specified bot token.
         Creates a fresh Bot + event loop per call so the httpx connection pool
         is properly scoped and cleaned up. Rate-limited to 1 message/second
         to avoid Telegram API throttling and pool exhaustion."""
@@ -50,7 +66,7 @@ class TelegramNotifier:
             loop = asyncio.new_event_loop()
             try:
                 # Fresh Bot per call — avoids stale connection pool from closed loops
-                bot = Bot(token=self.token)
+                bot = Bot(token=token)
                 loop.run_until_complete(
                     bot.send_message(
                         chat_id=self.chat_id,
@@ -286,6 +302,7 @@ class TelegramNotifier:
         Sent when the bot falls back from IG to yfinance for candle data.
         This means IG is unavailable (403, timeout, etc.) but the bot is
         still scanning using free Yahoo Finance data as a backup.
+        → System bot (infrastructure/ops)
         """
         pair_display = pair.replace("_", "/")
 
@@ -301,12 +318,13 @@ class TelegramNotifier:
             f"yfinance data may be ~15 min delayed.\n"
             f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
         )
-        self._send(message)
+        self._send_system(message)
 
     def health_alert(self, issue: str, details: str):
         """
         Sent immediately if something goes wrong with the bot.
         You'll know within seconds if there's a problem.
+        → System bot (infrastructure/ops)
         """
         message = (
             f"*⚠️ HEALTH ALERT*\n"
@@ -317,30 +335,33 @@ class TelegramNotifier:
             f"Check the logs: `docker-compose logs -f forex-bot`\n"
             f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
         )
-        self._send(message)
+        self._send_system(message)
 
     def health_recovered(self, issue: str):
-        """Sent when the bot recovers from an issue automatically."""
+        """Sent when the bot recovers from an issue automatically.
+        → System bot (infrastructure/ops)"""
         message = (
             f"*✅ RECOVERED*\n"
             f"The bot has recovered from: {issue}\n"
             f"All systems are operational again.\n"
             f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
         )
-        self._send(message)
+        self._send_system(message)
 
     def dev_activity(self, summary: str):
-        """Sent after code changes are deployed — keeps Joseph informed."""
+        """Sent after code changes are deployed — keeps Joseph informed.
+        → System bot (infrastructure/ops)"""
         message = (
             f"*🛠 DEV ACTIVITY UPDATE*\n"
             f"─────────────────────\n"
             f"{summary}\n"
             f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
         )
-        self._send(message)
+        self._send_system(message)
 
     def startup_message(self):
-        """Sent when the bot starts up — confirms it's running."""
+        """Sent when the bot starts up — confirms it's running.
+        → System bot (infrastructure/ops)"""
         env = config.IG_ENVIRONMENT.upper()
         message = (
             f"*🚀 BOT STARTED*\n"
@@ -354,4 +375,4 @@ class TelegramNotifier:
             f"\nAll systems operational. Watching the markets. 👀\n"
             f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
         )
-        self._send(message)
+        self._send_system(message)

@@ -46,8 +46,11 @@ IG_BASE_URL = (
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN     = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID       = os.getenv("TELEGRAM_CHAT_ID")
+# Separate bot for system/ops notifications (health, fallback, startup, drift alerts)
+# Falls back to the trading bot token if not set
+TELEGRAM_BOT_SYS_TOKEN = os.getenv("TELEGRAM_BOT_SYS_TOKEN", "") or TELEGRAM_BOT_TOKEN
 
 # ── Claude AI ─────────────────────────────────────────────────────────────────
 

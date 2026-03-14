@@ -84,7 +84,7 @@ services:
     restart: unless-stopped
     environment:
       - MCP_SERVER_URL=http://mcp-server:8090
-      - DB_PATH=/app/data_store/trades.db
+      - DB_PATH=/app/data_store/trader.db
       - CONFIG_PATH=/app/config/config.yaml
       - WIKI_REPO_URL=https://github.com/joegooderham/ai-trader-bot.wiki.git
     volumes:

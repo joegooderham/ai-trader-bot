@@ -38,7 +38,7 @@ from loguru import logger
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://mcp-server:8090")
 
 # SQLite database path — mounted volume from the trading bot
-DB_PATH = os.getenv("DB_PATH", "/app/data_store/trades.db")
+DB_PATH = os.getenv("DB_PATH", "/app/data_store/trader.db")
 
 # Wiki repo URL and local clone path
 WIKI_REPO_URL = os.getenv("WIKI_REPO_URL", "https://github.com/joegooderham/ai-trader-bot.wiki.git")

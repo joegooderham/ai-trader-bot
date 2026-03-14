@@ -24,7 +24,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 import joblib
 from pathlib import Path
 from loguru import logger
@@ -259,14 +259,40 @@ class LSTMTrainer:
         logger.info(f"Class distribution: BUY={counts[0]}, SELL={counts[1]}, HOLD={counts[2]}")
         logger.info(f"Class weights: {class_weights.tolist()}")
 
-        # Create model and data loaders
-        model = ForexLSTM(input_size=X_train.shape[2])
+        # Read model architecture params from config (with sensible defaults)
+        hidden_size = config._cfg.get("lstm", {}).get("hidden_size", 96)
+        num_layers = config._cfg.get("lstm", {}).get("num_layers", 2)
+        dropout = config._cfg.get("lstm", {}).get("dropout", 0.3)
+
+        # Create model with configurable architecture
+        model = ForexLSTM(
+            input_size=X_train.shape[2],
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
+        # Learning rate scheduler — halves LR when val loss plateaus.
+        # This prevents the optimiser from overshooting once it's close to a minimum.
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=3, verbose=False
+        )
+
+        # Weighted random sampler — oversamples minority classes (BUY/SELL)
+        # so the model sees them as often as HOLD during training.
+        # This is more effective than class weights alone because it changes
+        # what the model actually sees, not just how losses are scaled.
+        sample_weights = torch.tensor([
+            1.0 / counts.get(int(label), 1) for label in y_train
+        ], dtype=torch.float32)
+        sampler = WeightedRandomSampler(sample_weights, num_samples=len(y_train), replacement=True)
+
         train_dataset = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
         val_dataset = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        # Use sampler instead of shuffle — sampler and shuffle are mutually exclusive
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
         val_loader = DataLoader(val_dataset, batch_size=batch_size)
 
         # Training loop with early stopping
@@ -285,6 +311,8 @@ class LSTMTrainer:
                 outputs = model(X_batch)
                 loss = criterion(outputs, y_batch)
                 loss.backward()
+                # Gradient clipping — prevents exploding gradients in deeper LSTM
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
                 train_loss += loss.item() * len(y_batch)
@@ -311,11 +339,16 @@ class LSTMTrainer:
             val_loss /= val_total
             val_acc = val_correct / val_total
 
+            # Step the LR scheduler based on validation loss
+            scheduler.step(val_loss)
+            current_lr = optimizer.param_groups[0]["lr"]
+
             if (epoch + 1) % 5 == 0 or epoch == 0:
                 logger.info(
                     f"Epoch {epoch+1}/{epochs} | "
                     f"Train Loss: {train_loss:.4f} Acc: {train_acc:.3f} | "
-                    f"Val Loss: {val_loss:.4f} Acc: {val_acc:.3f}"
+                    f"Val Loss: {val_loss:.4f} Acc: {val_acc:.3f} | "
+                    f"LR: {current_lr:.6f}"
                 )
 
             # Early stopping
@@ -337,6 +370,14 @@ class LSTMTrainer:
         torch.save(model.state_dict(), str(MODEL_PATH))
         joblib.dump(scaler, str(SCALER_PATH))
 
+        # Also save a timestamped copy for model versioning — allows rollback
+        # if a retrain produces a worse model than the previous one
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        versioned_path = MODEL_DIR / f"lstm_{timestamp}.pt"
+        torch.save(model.state_dict(), str(versioned_path))
+        logger.info(f"Model version saved: {versioned_path.name}")
+
         metrics = {
             "epochs_trained": epoch + 1,
             "train_samples": len(X_train),
@@ -344,12 +385,17 @@ class LSTMTrainer:
             "best_val_loss": round(best_val_loss, 4),
             "val_accuracy": round(val_acc, 3),
             "train_accuracy": round(train_acc, 3),
+            "final_learning_rate": current_lr,
+            "hidden_size": hidden_size,
+            "num_layers": num_layers,
+            "num_features": X_train.shape[2],
             "class_distribution": {
                 "BUY": int(counts[0]),
                 "SELL": int(counts[1]),
                 "HOLD": int(counts[2]),
             },
             "model_path": str(MODEL_PATH),
+            "model_version": versioned_path.name,
         }
 
         return metrics

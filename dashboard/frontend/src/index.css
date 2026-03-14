@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+::-webkit-scrollbar-thumb {
+  background: #4b5563;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
+}
+
+/* Wiki content styling */
+.wiki-content h1 { @apply text-2xl font-bold mb-4 mt-6 text-white; }
+.wiki-content h2 { @apply text-xl font-semibold mb-3 mt-5 text-white; }
+.wiki-content h3 { @apply text-lg font-medium mb-2 mt-4 text-gray-200; }
+.wiki-content p { @apply mb-3 text-gray-300 leading-relaxed; }
+.wiki-content ul { @apply list-disc pl-6 mb-3 text-gray-300; }
+.wiki-content ol { @apply list-decimal pl-6 mb-3 text-gray-300; }
+.wiki-content li { @apply mb-1; }
+.wiki-content code { @apply bg-gray-800 text-green-400 px-1.5 py-0.5 rounded text-sm; }
+.wiki-content pre { @apply bg-gray-900 p-4 rounded-lg mb-4 overflow-x-auto; }
+.wiki-content pre code { @apply bg-transparent p-0; }
+.wiki-content table { @apply w-full border-collapse mb-4; }
+.wiki-content th { @apply bg-gray-800 text-left px-4 py-2 border border-gray-700 text-gray-200 font-medium; }
+.wiki-content td { @apply px-4 py-2 border border-gray-700 text-gray-300; }
+.wiki-content a { @apply text-blue-400 hover:text-blue-300 underline; }
+.wiki-content blockquote { @apply border-l-4 border-gray-600 pl-4 italic text-gray-400; }

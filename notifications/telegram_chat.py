@@ -77,6 +77,7 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("close", self.cmd_close))
         self.app.add_handler(CommandHandler("pause", self.cmd_pause))
         self.app.add_handler(CommandHandler("resume", self.cmd_resume))
+        self.app.add_handler(CommandHandler("datastatus", self.cmd_datastatus))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
 
         return self.app
@@ -99,6 +100,7 @@ class TelegramChatHandler:
             "*/pause* — Pause bot from opening new trades\n"
             "*/resume* — Resume trading after a pause\n"
             "*/stats* — All-time performance stats\n"
+            "*/datastatus* — Check IG vs yfinance status per pair\n"
             "*/fallbacktest* — Test yfinance backup data source\n"
             "*/query* `<question>` — Query trade database in plain English\n"
             "*/devops* — Today's code changes (git log)\n"
@@ -171,6 +173,53 @@ class TelegramChatHandler:
                 "⚠️ Could not reach MCP server to test yfinance fallback.\n"
                 f"Error: {str(e)[:200]}"
             )
+
+    async def cmd_datastatus(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show which pairs are using IG vs yfinance fallback."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        try:
+            # Access the scheduler's live broker to get real fallback state
+            import bot.scheduler as scheduler
+            live_broker = scheduler.broker
+
+            fallback_pairs = live_broker._fallback_alerted
+            all_pairs = config.PAIRS
+
+            if not fallback_pairs:
+                message = (
+                    "*✅ DATA SOURCE STATUS*\n"
+                    "─────────────────────────────\n"
+                    "All pairs using *IG live data* — no fallbacks active.\n"
+                )
+            else:
+                ig_pairs = [p for p in all_pairs if p not in fallback_pairs]
+                message = (
+                    "*🔄 DATA SOURCE STATUS*\n"
+                    "─────────────────────────────\n"
+                )
+                for p in all_pairs:
+                    pair_display = p.replace("_", "/")
+                    if p in fallback_pairs:
+                        message += f"🟡 *{pair_display}*: yfinance (~15 min delay)\n"
+                    else:
+                        message += f"🟢 *{pair_display}*: IG live\n"
+
+                message += (
+                    f"\n─────────────────────────────\n"
+                    f"*{len(fallback_pairs)}/{len(all_pairs)}* pairs on yfinance fallback.\n"
+                    f"IG demo data allowance resets weekly (usually Sun/Mon).\n"
+                    f"Bot continues scanning normally on yfinance data."
+                )
+
+            message += f"\n\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Data status command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch data source status: {str(e)[:200]}")
 
     async def cmd_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Query the SQLite trade database using natural language.

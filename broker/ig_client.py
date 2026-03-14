@@ -159,9 +159,10 @@ class IGClient:
         # to avoid circular imports (scheduler creates both IGClient and TelegramNotifier)
         self._notifier = None
 
-        # Track which pairs have already sent a yfinance fallback alert so we
-        # only notify once per pair (not every scan) until IG recovers
+        # Track yfinance fallback state — one summary alert when fallback first
+        # activates, silence until IG recovers. No per-pair spam.
         self._fallback_alerted: set = set()
+        self._fallback_notified: bool = False  # True once the summary alert has been sent
 
         # SQLite candle storage — persists candle data across restarts so we
         # never re-fetch historical data we already have
@@ -444,15 +445,19 @@ class IGClient:
         """
         df = self._fetch_candles_from_ig(pair, count=count, granularity=granularity)
         if df is not None and not df.empty:
-            # IG recovered for this pair — clear the fallback alert flag so we
-            # re-notify if it fails again in a future cycle
+            # IG recovered for this pair — track it
             if pair in self._fallback_alerted:
                 self._fallback_alerted.discard(pair)
-                if self._notifier:
-                    try:
-                        self._notifier.health_recovered(f"IG data restored for {pair.replace('_', '/')}")
-                    except Exception:
-                        pass
+                # If ALL pairs have recovered, send one summary recovery message
+                if not self._fallback_alerted and self._fallback_notified:
+                    self._fallback_notified = False
+                    if self._notifier:
+                        try:
+                            self._notifier.health_recovered(
+                                "IG data feed restored — all pairs back on live IG data"
+                            )
+                        except Exception:
+                            pass
             # Persist IG candles to SQLite for historical record
             if self._storage:
                 self._storage.save_candles(pair, granularity, df, source="ig")
@@ -462,17 +467,25 @@ class IGClient:
         logger.warning(f"IG candle fetch failed for {pair} — falling back to yfinance")
         fallback_df = self._fetch_candles_from_yfinance(pair, count=count, granularity=granularity)
 
-        # Only notify once per pair — avoids spamming every scan while IG is down
-        if fallback_df is not None and not fallback_df.empty and self._notifier:
-            if pair not in self._fallback_alerted:
-                self._fallback_alerted.add(pair)
-                try:
-                    self._notifier.data_source_fallback(
-                        pair=pair,
-                        reason="IG API returned no data (possible 403 rate limit or outage)"
+        # Track this pair as using fallback
+        self._fallback_alerted.add(pair)
+
+        # Send ONE summary alert the first time any pair falls back, then silence.
+        # User can check /datastatus any time for current state.
+        if not self._fallback_notified and self._notifier:
+            self._fallback_notified = True
+            try:
+                self._notifier.data_source_fallback(
+                    pair=pair,
+                    reason=(
+                        "IG demo data allowance likely exhausted (403 errors). "
+                        "All pairs will use yfinance (free, ~15 min delayed) until "
+                        "IG resets — usually Sunday/Monday.\n\n"
+                        "Use /datastatus to check which pairs are on IG vs yfinance."
                     )
-                except Exception as e:
-                    logger.error(f"Failed to send fallback Telegram alert: {e}")
+                )
+            except Exception as e:
+                logger.error(f"Failed to send fallback Telegram alert: {e}")
 
         # Persist yfinance candles to SQLite too
         if fallback_df is not None and not fallback_df.empty and self._storage:

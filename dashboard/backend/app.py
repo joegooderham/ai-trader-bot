@@ -29,7 +29,7 @@ import markdown
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse
 from loguru import logger
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -72,6 +72,15 @@ app.add_middleware(
 
 # ── Database Helper ──────────────────────────────────────────────────────────
 
+# Empty result templates — returned when DB is unavailable so the frontend
+# always gets valid JSON instead of a 500 error
+EMPTY_OVERVIEW = {
+    "today": {"date": "", "trades": 0, "closed": 0, "wins": 0, "losses": 0, "net_pl": 0, "win_rate": 0},
+    "open_positions": [],
+    "all_time": {"total_trades": 0, "total_wins": 0, "total_pl": 0, "win_rate": 0},
+    "system": {},
+}
+
 
 @contextmanager
 def get_db():
@@ -83,6 +92,16 @@ def get_db():
         yield conn
     finally:
         conn.close()
+
+
+def db_available() -> bool:
+    """Quick check if the database file exists and is readable."""
+    try:
+        with get_db() as db:
+            db.execute("SELECT 1").fetchone()
+        return True
+    except Exception:
+        return False
 
 
 # ── MCP Proxy Helper ────────────────────────────────────────────────────────
@@ -160,29 +179,45 @@ async def get_overview():
     """Main dashboard overview — account status, today's summary, system health."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    with get_db() as db:
-        # Today's trades
-        trades_today = db.execute(
-            "SELECT * FROM trades WHERE date(opened_at) = ? ORDER BY opened_at DESC",
-            (today,)
-        ).fetchall()
+    # Return empty data gracefully if DB is unavailable
+    if not db_available():
+        result = {**EMPTY_OVERVIEW}
+        result["today"]["date"] = today
+        result["system"] = await mcp_get("/health")
+        result["db_status"] = "unavailable"
+        return result
 
-        # Calculate today's P&L
-        closed_today = [t for t in trades_today if t["closed_at"] is not None]
-        today_pl = sum(t["profit_loss"] for t in closed_today if t["profit_loss"])
-        wins = sum(1 for t in closed_today if t["profit_loss"] and t["profit_loss"] > 0)
-        losses = sum(1 for t in closed_today if t["profit_loss"] and t["profit_loss"] <= 0)
+    try:
+        with get_db() as db:
+            # Today's trades
+            trades_today = db.execute(
+                "SELECT * FROM trades WHERE date(opened_at) = ? ORDER BY opened_at DESC",
+                (today,)
+            ).fetchall()
 
-        # Open positions
-        open_positions = db.execute(
-            "SELECT * FROM trades WHERE closed_at IS NULL ORDER BY opened_at DESC"
-        ).fetchall()
+            # Calculate today's P&L
+            closed_today = [t for t in trades_today if t["closed_at"] is not None]
+            today_pl = sum(t["profit_loss"] for t in closed_today if t["profit_loss"])
+            wins = sum(1 for t in closed_today if t["profit_loss"] and t["profit_loss"] > 0)
+            losses = sum(1 for t in closed_today if t["profit_loss"] and t["profit_loss"] <= 0)
 
-        # All-time stats
-        all_closed = db.execute(
-            "SELECT COUNT(*) as total, SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins, "
-            "SUM(profit_loss) as total_pl FROM trades WHERE closed_at IS NOT NULL"
-        ).fetchone()
+            # Open positions
+            open_positions = db.execute(
+                "SELECT * FROM trades WHERE closed_at IS NULL ORDER BY opened_at DESC"
+            ).fetchall()
+
+            # All-time stats
+            all_closed = db.execute(
+                "SELECT COUNT(*) as total, SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as wins, "
+                "SUM(profit_loss) as total_pl FROM trades WHERE closed_at IS NOT NULL"
+            ).fetchone()
+    except Exception as e:
+        logger.error(f"Database error in overview: {e}")
+        result = {**EMPTY_OVERVIEW}
+        result["today"]["date"] = today
+        result["system"] = await mcp_get("/health")
+        result["db_status"] = f"error: {e}"
+        return result
 
     # Get system health from MCP
     health = await mcp_get("/health")
@@ -215,12 +250,15 @@ async def get_overview():
 @app.get("/api/positions")
 async def get_positions():
     """Current open positions with live data."""
-    with get_db() as db:
-        positions = db.execute(
-            "SELECT * FROM trades WHERE closed_at IS NULL ORDER BY opened_at DESC"
-        ).fetchall()
-
-    return {"positions": [dict(p) for p in positions]}
+    try:
+        with get_db() as db:
+            positions = db.execute(
+                "SELECT * FROM trades WHERE closed_at IS NULL ORDER BY opened_at DESC"
+            ).fetchall()
+        return {"positions": [dict(p) for p in positions]}
+    except Exception as e:
+        logger.error(f"Database error in positions: {e}")
+        return {"positions": [], "db_status": "unavailable"}
 
 
 # ── API Routes: Trade History ────────────────────────────────────────────────
@@ -229,34 +267,38 @@ async def get_positions():
 @app.get("/api/trades")
 async def get_trades(limit: int = 50, offset: int = 0, pair: str = None):
     """Closed trade history, filterable by pair."""
-    with get_db() as db:
-        query = "SELECT * FROM trades WHERE closed_at IS NOT NULL"
-        params = []
+    try:
+        with get_db() as db:
+            query = "SELECT * FROM trades WHERE closed_at IS NOT NULL"
+            params = []
 
-        if pair:
-            query += " AND pair = ?"
-            params.append(pair)
+            if pair:
+                query += " AND pair = ?"
+                params.append(pair)
 
-        query += " ORDER BY closed_at DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
+            query += " ORDER BY closed_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
 
-        trades = db.execute(query, params).fetchall()
+            trades = db.execute(query, params).fetchall()
 
-        # Get total count for pagination
-        count_query = "SELECT COUNT(*) as count FROM trades WHERE closed_at IS NOT NULL"
-        count_params = []
-        if pair:
-            count_query += " AND pair = ?"
-            count_params.append(pair)
+            # Get total count for pagination
+            count_query = "SELECT COUNT(*) as count FROM trades WHERE closed_at IS NOT NULL"
+            count_params = []
+            if pair:
+                count_query += " AND pair = ?"
+                count_params.append(pair)
 
-        total = db.execute(count_query, count_params).fetchone()["count"]
+            total = db.execute(count_query, count_params).fetchone()["count"]
 
-    return {
-        "trades": [dict(t) for t in trades],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+        return {
+            "trades": [dict(t) for t in trades],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception as e:
+        logger.error(f"Database error in trades: {e}")
+        return {"trades": [], "total": 0, "limit": limit, "offset": offset, "db_status": "unavailable"}
 
 
 # ── API Routes: Analytics ───────────────────────────────────────────────────
@@ -304,32 +346,36 @@ async def get_analytics_predictions():
 @app.get("/api/charts/pl-history")
 async def get_pl_history(days: int = 30):
     """Daily P&L for charting."""
-    with get_db() as db:
-        rows = db.execute(
-            """SELECT date(closed_at) as date,
-                      SUM(profit_loss) as daily_pl,
-                      COUNT(*) as trades
-               FROM trades
-               WHERE closed_at IS NOT NULL
-                 AND closed_at >= date('now', ?)
-               GROUP BY date(closed_at)
-               ORDER BY date ASC""",
-            (f"-{days} days",)
-        ).fetchall()
+    try:
+        with get_db() as db:
+            rows = db.execute(
+                """SELECT date(closed_at) as date,
+                          SUM(profit_loss) as daily_pl,
+                          COUNT(*) as trades
+                   FROM trades
+                   WHERE closed_at IS NOT NULL
+                     AND closed_at >= date('now', ?)
+                   GROUP BY date(closed_at)
+                   ORDER BY date ASC""",
+                (f"-{days} days",)
+            ).fetchall()
 
-    # Build cumulative P&L
-    cumulative = 0
-    result = []
-    for row in rows:
-        cumulative += row["daily_pl"] or 0
-        result.append({
-            "date": row["date"],
-            "daily_pl": round(row["daily_pl"] or 0, 2),
-            "cumulative_pl": round(cumulative, 2),
-            "trades": row["trades"],
-        })
+        # Build cumulative P&L
+        cumulative = 0
+        result = []
+        for row in rows:
+            cumulative += row["daily_pl"] or 0
+            result.append({
+                "date": row["date"],
+                "daily_pl": round(row["daily_pl"] or 0, 2),
+                "cumulative_pl": round(cumulative, 2),
+                "trades": row["trades"],
+            })
 
-    return {"data": result}
+        return {"data": result}
+    except Exception as e:
+        logger.error(f"Database error in pl-history: {e}")
+        return {"data": []}
 
 
 # ── API Routes: Wiki ────────────────────────────────────────────────────────
@@ -417,12 +463,7 @@ async def health_check():
         status["mcp_server"] = "unreachable"
 
     # Check SQLite
-    try:
-        with get_db() as db:
-            db.execute("SELECT 1").fetchone()
-        status["database"] = "ok"
-    except Exception:
-        status["database"] = "unreachable"
+    status["database"] = "ok" if db_available() else "unreachable"
 
     return status
 
@@ -431,6 +472,7 @@ async def health_check():
 # Mount static files LAST so API routes take priority
 
 if STATIC_DIR.exists():
+    # Serve static assets (JS, CSS, images) with correct MIME types
     app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
     @app.get("/{full_path:path}")

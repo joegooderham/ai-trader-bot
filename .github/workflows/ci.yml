@@ -21,6 +21,7 @@ jobs:
           IG_PASSWORD: ${{ secrets.IG_PASSWORD }}
           IG_ENVIRONMENT: ${{ secrets.IG_ENVIRONMENT }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_SYS_TOKEN: ${{ secrets.TELEGRAM_BOT_SYS_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |

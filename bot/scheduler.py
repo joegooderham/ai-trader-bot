@@ -197,7 +197,7 @@ def _check_circuit_breaker() -> bool:
                 f"(£{_day_start_balance:.2f} → £{current_balance:.2f}). "
                 f"Trading paused until {_circuit_breaker_until.strftime('%Y-%m-%d %H:%M UTC')}"
             )
-            notifier._send(
+            notifier._send_system(
                 f"🚨 *CIRCUIT BREAKER ACTIVATED*\n"
                 f"─────────────────────────────\n"
                 f"Account down *{drawdown_pct:.1f}%* today\n"
@@ -753,7 +753,7 @@ def retrain_lstm():
 
         if "error" in metrics:
             logger.error(f"LSTM retrain failed: {metrics['error']}")
-            notifier._send(f"⚠️ *LSTM Retrain Failed*\n{metrics['error']}")
+            notifier._send_system(f"⚠️ *LSTM Retrain Failed*\n{metrics['error']}")
             return
 
         # Reload the predictor with the freshly trained model
@@ -779,7 +779,7 @@ def retrain_lstm():
 
     except Exception as e:
         logger.error(f"LSTM retrain failed with exception: {e}")
-        notifier._send(f"⚠️ *LSTM Retrain Error*\n{e}")
+        notifier._send_system(f"⚠️ *LSTM Retrain Error*\n{e}")
     finally:
         _retrain_running = False
         _retrain_lock.release()
@@ -863,7 +863,7 @@ def check_drift():
     result = drift_detector.check()
 
     if result["status"] == "drift":
-        notifier._send(
+        notifier._send_system(
             f"⚠️ *Model Drift Detected*\n"
             f"─────────────────────────────\n"
             f"Live accuracy: {result['rolling_accuracy_24h']:.1f}%\n"
@@ -1041,7 +1041,7 @@ def main():
         except KeyboardInterrupt:
             logger.info("Bot stopped by user")
             scheduler.shutdown()
-            notifier._send("⚠️ *Bot Stopped* — manually stopped by user.")
+            notifier._send_system("⚠️ *Bot Stopped* — manually stopped by user.")
         except Exception as e:
             logger.error(f"Telegram polling error: {e}")
             scheduler.shutdown()

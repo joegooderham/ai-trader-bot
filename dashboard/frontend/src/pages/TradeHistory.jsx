@@ -75,10 +75,10 @@ export default function TradeHistory() {
                     }`}>
                       {trade.direction}
                     </td>
-                    <td className="px-4 py-3 font-mono">{trade.entry_price}</td>
+                    <td className="px-4 py-3 font-mono">{trade.fill_price}</td>
                     <td className="px-4 py-3 font-mono">{trade.close_price}</td>
                     <td className="px-4 py-3">
-                      <PLBadge value={trade.profit_loss || 0} />
+                      <PLBadge value={trade.pl || 0} />
                     </td>
                     <td className="px-4 py-3 text-gray-400 max-w-[200px] truncate">
                       {trade.close_reason || '\u2014'}
@@ -98,7 +98,7 @@ export default function TradeHistory() {
               <div key={i} className="bg-gray-900 border border-gray-800 rounded-lg p-3">
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-medium text-white">{trade.pair?.replace('_', '/')}</span>
-                  <PLBadge value={trade.profit_loss || 0} />
+                  <PLBadge value={trade.pl || 0} />
                 </div>
                 <div className="flex justify-between text-xs text-gray-400">
                   <span className={trade.direction === 'BUY' ? 'text-profit' : 'text-loss'}>
@@ -107,7 +107,7 @@ export default function TradeHistory() {
                   <span>{trade.closed_at?.slice(0, 10)}</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-1">
-                  {trade.entry_price} &rarr; {trade.close_price}
+                  {trade.fill_price} &rarr; {trade.close_price}
                   {trade.close_reason && ` | ${trade.close_reason}`}
                 </div>
               </div>

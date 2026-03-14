@@ -98,7 +98,7 @@ export default function Overview() {
                   <th className="pb-2">Pair</th>
                   <th className="pb-2">Direction</th>
                   <th className="pb-2">Entry</th>
-                  <th className="pb-2">Units</th>
+                  <th className="pb-2">Size</th>
                   <th className="pb-2">Opened</th>
                 </tr>
               </thead>
@@ -109,8 +109,8 @@ export default function Overview() {
                     <td className={`py-2 ${pos.direction === 'BUY' ? 'text-profit' : 'text-loss'}`}>
                       {pos.direction}
                     </td>
-                    <td className="py-2 font-mono">{pos.entry_price}</td>
-                    <td className="py-2">{pos.units?.toLocaleString()}</td>
+                    <td className="py-2 font-mono">{pos.fill_price}</td>
+                    <td className="py-2">{pos.size} lot{pos.size !== 1 ? 's' : ''}</td>
                     <td className="py-2 text-gray-400">{pos.opened_at?.slice(0, 16)}</td>
                   </tr>
                 ))}
@@ -129,7 +129,7 @@ export default function Overview() {
                   </span>
                 </div>
                 <div className="text-xs text-gray-400">
-                  Entry: <span className="font-mono">{pos.entry_price}</span> | Units: {pos.units?.toLocaleString()}
+                  Entry: <span className="font-mono">{pos.fill_price}</span> | Size: {pos.size} lot{pos.size !== 1 ? 's' : ''}
                 </div>
               </div>
             ))}

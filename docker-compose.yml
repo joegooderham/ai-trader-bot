@@ -97,6 +97,22 @@ services:
     networks:
       - forex-network
 
+  # Cloudflare Tunnel — exposes dashboard at aitradefintech.com via HTTPS
+  # Routes: aitradefintech.com → dashboard:8050
+  # SSL is handled by Cloudflare edge — no certs to manage
+  # Auth is handled by Cloudflare Access — no app-level auth code needed
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ai-trader-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - dashboard
+    networks:
+      - forex-network
+
 networks:
   forex-network:
     driver: bridge

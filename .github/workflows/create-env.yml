@@ -20,6 +20,7 @@ jobs:
           TELEGRAM_BOT_SYS_TOKEN: ${{ secrets.TELEGRAM_BOT_SYS_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
           @"
           # Auto-generated from GitHub Secrets — do not commit
@@ -32,6 +33,7 @@ jobs:
           TELEGRAM_BOT_SYS_TOKEN=$env:TELEGRAM_BOT_SYS_TOKEN
           TELEGRAM_CHAT_ID=$env:TELEGRAM_CHAT_ID
           ANTHROPIC_API_KEY=$env:ANTHROPIC_API_KEY
+          CLOUDFLARE_TUNNEL_TOKEN=$env:CLOUDFLARE_TUNNEL_TOKEN
           MAX_CAPITAL=500
           MIN_CONFIDENCE_SCORE=60
           HOLD_OVERNIGHT_THRESHOLD=98

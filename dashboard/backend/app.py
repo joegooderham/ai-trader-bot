@@ -246,6 +246,40 @@ async def get_overview():
     }
 
 
+# ── API Routes: Running P&L ──────────────────────────────────────────────────
+
+
+@app.get("/api/running-pl")
+async def get_running_pl():
+    """Running P&L total: realised (closed trades) + unrealised (open positions).
+    Polled by the dashboard header to show a live running total."""
+    try:
+        with get_db() as db:
+            # Realised P&L from all closed trades
+            realised = db.execute(
+                "SELECT COALESCE(SUM(pl), 0) as total FROM trades WHERE closed_at IS NOT NULL"
+            ).fetchone()["total"]
+
+            # Unrealised P&L from open positions (estimated from fill_price vs current data)
+            # Open trades don't have close_price yet, so unrealised is 0 until
+            # the bot updates them with live market prices
+            unrealised_row = db.execute(
+                "SELECT COALESCE(SUM(pl), 0) as total FROM trades WHERE closed_at IS NULL"
+            ).fetchone()
+            unrealised = unrealised_row["total"] if unrealised_row else 0
+
+        total = round(realised + unrealised, 2)
+        return {
+            "total_pl": total,
+            "realised": round(realised, 2),
+            "unrealised": round(unrealised, 2),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Database error in running-pl: {e}")
+        return {"total_pl": 0, "realised": 0, "unrealised": 0, "updated_at": None}
+
+
 # ── API Routes: Positions ───────────────────────────────────────────────────
 
 

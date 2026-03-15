@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
+import RunningPL from './RunningPL'
 
 const navItems = [
   { to: '/', label: 'Overview' },
@@ -25,7 +26,9 @@ export default function Layout({ children }) {
       {/* Mobile header bar */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-30 bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-center justify-between">
         <h1 className="text-lg font-bold text-white">AI Trader</h1>
-        <button
+        <div className="flex items-center gap-3">
+          <RunningPL />
+          <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
           className="text-gray-400 hover:text-white p-1"
           aria-label="Toggle menu"
@@ -42,6 +45,7 @@ export default function Layout({ children }) {
             </svg>
           )}
         </button>
+        </div>
       </div>
 
       {/* Overlay for mobile sidebar */}
@@ -88,6 +92,10 @@ export default function Layout({ children }) {
 
       {/* Main content — offset for sidebar on desktop, offset for header on mobile */}
       <main className="lg:ml-56 flex-1 p-4 md:p-6 mt-14 lg:mt-0">
+        {/* Running P&L in top-right corner on desktop */}
+        <div className="hidden lg:flex justify-end mb-4">
+          <RunningPL />
+        </div>
         {children}
       </main>
     </div>

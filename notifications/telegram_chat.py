@@ -619,6 +619,18 @@ class TelegramChatHandler:
                 await update.message.reply_text("No open positions to close.")
                 return
 
+            # Persist each close to SQLite so dashboard stays in sync with Telegram
+            for r in results:
+                deal_id = r.get("deal_id")
+                if deal_id:
+                    self.storage.update_trade(deal_id, {
+                        "close_price": r.get("close_price"),
+                        "pl": r.get("pl", 0),
+                        "closed_at": r.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                        "close_reason": "Manual close all",
+                        "status": "CLOSED",
+                    })
+
             total_pl = sum(r.get("pl", 0) for r in results)
             pl_sign = "+" if total_pl >= 0 else ""
             pl_emoji = "✅" if total_pl >= 0 else "❌"
@@ -703,6 +715,16 @@ class TelegramChatHandler:
 
             if result:
                 pl = result.get("pl", 0)
+
+                # Persist the close to SQLite so dashboard stays in sync with Telegram
+                self.storage.update_trade(deal_id, {
+                    "close_price": result.get("close_price"),
+                    "pl": pl,
+                    "closed_at": result.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                    "close_reason": "Manual close",
+                    "status": "CLOSED",
+                })
+
                 pl_sign = "+" if pl >= 0 else ""
                 emoji = "✅" if pl >= 0 else "❌"
                 await update.message.reply_text(

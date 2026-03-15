@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 from notifications.telegram_bot import TelegramNotifier
 from bot import config
+from scripts.consistency_checker import run_consistency_check
 
 notifier = TelegramNotifier()
 
@@ -28,6 +29,8 @@ notifier = TelegramNotifier()
 _known_issues = set()
 
 CHECK_INTERVAL_SECONDS = 60  # Check every minute
+CONSISTENCY_CHECK_INTERVAL = 5  # Run data consistency check every 5th cycle (5 min)
+_check_cycle = 0
 
 
 def check_service(name: str, url: str) -> bool:
@@ -61,6 +64,17 @@ def check_disk_space() -> tuple[bool, float]:
 
 def run_health_checks():
     """Run all health checks and send Telegram alerts for any failures."""
+    global _check_cycle
+    _check_cycle += 1
+
+    # ── Data consistency check (every 5 minutes) ─────────────────────────
+    # Reconciles SQLite open trades vs live IG broker state.
+    # Auto-repairs stale DB records and alerts via system bot if mismatches found.
+    if _check_cycle % CONSISTENCY_CHECK_INTERVAL == 0:
+        try:
+            run_consistency_check(notifier=notifier)
+        except Exception as e:
+            logger.error(f"Consistency check error: {e}")
 
     # Check trading bot
     bot_ok = check_service("Trading Bot", "http://forex-bot:8080/health")

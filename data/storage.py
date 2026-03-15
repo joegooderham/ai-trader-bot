@@ -235,7 +235,11 @@ class TradeStorage:
             conn.close()
 
     def update_trade(self, trade_id: str, updates: dict):
-        """Update an existing trade record (e.g., when it closes with P&L)."""
+        """
+        Update an existing trade record (e.g., when it closes with P&L).
+        Matches on trade_id OR deal_id to handle both open and close paths,
+        since save_trade() stores deal_id in both columns.
+        """
         conn = _get_connection()
         try:
             # Build SET clause dynamically from the updates dict
@@ -246,14 +250,30 @@ class TradeStorage:
                     value = json.dumps(value)
                 columns.append(f"{key} = ?")
                 values.append(value)
-            values.append(trade_id)
+            # Match on either trade_id or deal_id column for robustness
+            values.extend([trade_id, trade_id])
 
             if columns:
-                conn.execute(
-                    f"UPDATE trades SET {', '.join(columns)} WHERE trade_id = ?",
+                rows_changed = conn.execute(
+                    f"UPDATE trades SET {', '.join(columns)} WHERE trade_id = ? OR deal_id = ?",
                     values
-                )
+                ).rowcount
                 conn.commit()
+                if rows_changed == 0:
+                    logger.warning(f"update_trade: no matching row for trade_id/deal_id={trade_id}")
+                else:
+                    logger.debug(f"Trade {trade_id} updated: {list(updates.keys())}")
+        finally:
+            conn.close()
+
+    def get_open_trades_from_db(self) -> list:
+        """Return all trades that the DB thinks are still open (closed_at IS NULL)."""
+        conn = _get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM trades WHERE closed_at IS NULL ORDER BY opened_at DESC"
+            ).fetchall()
+            return [self._row_to_dict(r) for r in rows]
         finally:
             conn.close()
 

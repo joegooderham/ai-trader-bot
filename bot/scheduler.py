@@ -454,10 +454,39 @@ def _on_streaming_position_update(position: dict):
     if not deal_id:
         return
 
-    # If the position was closed (status = DELETED), notify and clean up
+    # If the position was closed (status = DELETED), persist to DB and clean up.
+    # This catches stop-loss and take-profit hits that happen on IG's servers —
+    # without this, the trade stays "open" in SQLite and the dashboard is wrong.
     if status == "DELETED":
         logger.info(f"Position closed via streaming: {pair} (deal {deal_id})")
         _last_reported_pl.pop(deal_id, None)
+
+        close_price = position.get("closePrice") or position.get("level")
+        pl = position.get("pl") or position.get("profit", 0)
+        storage.update_trade(deal_id, {
+            "close_price": close_price,
+            "pl": pl,
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+            "close_reason": "Broker closed (stop/TP hit)",
+            "status": "CLOSED",
+        })
+        logger.info(f"DB updated for streamed close: {pair} deal={deal_id} pl={pl}")
+
+        # Send Telegram notification so the user knows about stop/TP hits
+        trade_num = storage.get_trade_number(deal_id)
+        try:
+            balance = broker.get_account_balance()
+        except Exception:
+            balance = None
+        notifier.trade_closed(
+            pair=pair,
+            direction=position.get("direction", "N/A"),
+            close_price=close_price or 0,
+            pl=pl,
+            reason="Stop/TP hit (streaming)",
+            account_balance=balance,
+            trade_number=trade_num,
+        )
         return
 
     # Check if P&L has changed significantly since last alert
@@ -615,8 +644,20 @@ def force_close_all():
     if close_results:
         for result in close_results:
             balance = broker.get_account_balance()
+            deal_id = result.get("deal_id")
             # Look up the trade number from when this position was opened
-            trade_num = storage.get_trade_number(result.get("deal_id"))
+            trade_num = storage.get_trade_number(deal_id)
+
+            # Persist the close data to SQLite so dashboard and reports stay in sync
+            if deal_id:
+                storage.update_trade(deal_id, {
+                    "close_price": result.get("close_price"),
+                    "pl": result.get("pl") or result.get("profit_loss", 0),
+                    "closed_at": result.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                    "close_reason": "End of day close",
+                    "status": "CLOSED",
+                })
+
             notifier.trade_closed(
                 pair=result.get("pair", "Unknown"),
                 direction="N/A",

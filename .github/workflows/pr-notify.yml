@@ -17,7 +17,6 @@ jobs:
 
       - name: Build and send Telegram notification
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_BOT_SYS_TOKEN: ${{ secrets.TELEGRAM_BOT_SYS_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -62,20 +61,10 @@ jobs:
           # Remove leading whitespace from heredoc-style indentation
           MESSAGE=$(echo "$MESSAGE" | sed 's/^          //')
 
-          # Send via trading bot (primary notification)
+          # Send via system bot only (keeps PR notifications in the ops channel)
           curl -s -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_SYS_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" \
             -d text="${MESSAGE}" \
             -d parse_mode="Markdown" \
             -d disable_web_page_preview="true"
-
-          # Also send via system bot if configured (keeps ops alerts in the sys channel)
-          if [ -n "${TELEGRAM_BOT_SYS_TOKEN}" ]; then
-            curl -s -X POST \
-              "https://api.telegram.org/bot${TELEGRAM_BOT_SYS_TOKEN}/sendMessage" \
-              -d chat_id="${TELEGRAM_CHAT_ID}" \
-              -d text="${MESSAGE}" \
-              -d parse_mode="Markdown" \
-              -d disable_web_page_preview="true"
-          fi

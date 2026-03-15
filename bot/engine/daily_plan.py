@@ -39,6 +39,7 @@ class DailyPlanGenerator:
 
         Returns a formatted string suitable for Telegram.
         Called at the end of each trading day, after the daily report.
+        Also persists the plan to SQLite so the dashboard can display it.
         """
         logger.info("Generating tomorrow's trading plan")
 
@@ -47,6 +48,16 @@ class DailyPlanGenerator:
 
         # Ask Claude to synthesise this into a strategic plan
         plan = self._ask_claude_for_plan(context)
+
+        # Persist to SQLite so the dashboard can display the latest plan
+        try:
+            self.storage.save_daily_plan(
+                date=context["tomorrow_date"],
+                plan_text=plan,
+                context=context,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist daily plan: {e}")
 
         return plan
 

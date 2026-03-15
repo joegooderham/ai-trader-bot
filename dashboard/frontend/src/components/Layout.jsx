@@ -5,6 +5,7 @@ const navItems = [
   { to: '/', label: 'Overview' },
   { to: '/positions', label: 'Positions' },
   { to: '/trades', label: 'Trades' },
+  { to: '/summary', label: 'Summary' },
   { to: '/analytics', label: 'Analytics' },
   { to: '/wiki', label: 'Wiki' },
   { to: '/config', label: 'Config' },

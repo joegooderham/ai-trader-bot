@@ -29,7 +29,9 @@ notifier = TelegramNotifier()
 _known_issues = set()
 
 CHECK_INTERVAL_SECONDS = 60  # Check every minute
-CONSISTENCY_CHECK_INTERVAL = 5  # Run data consistency check every 5th cycle (5 min)
+# Consistency check is now a safety net — position changes are persisted reactively
+# via streaming events and close handlers. This just catches anything that slipped through.
+CONSISTENCY_CHECK_INTERVAL = 15  # Run data consistency check every 15th cycle (15 min)
 _check_cycle = 0
 
 

@@ -209,6 +209,12 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 - **Data**: SQLite (trade history + candle cache), yfinance (historical data + refresh)
 - **Secrets**: Injected via GitHub Actions — never hardcode credentials in code or config files
 
+## Pending Actions
+
+- **Branch `claude/telegram-pr-notifications-xfpGo`** is ready to merge into `main` — contains 15 new Telegram commands (close pair/profitable/losing, balance, P&L today/week, history, status, report, setconfidence, setrisk, settings, deploy, deploystatus) plus updated help, docs, and config
+- **After merging**: add `GITHUB_PAT` secret in GitHub Settings → Secrets (needs `repo` + `workflow` scopes) for the `/deploy` and `/deploystatus` commands to work
+- **Optional**: also add `GITHUB_REPO` secret (defaults to `joegooderham/ai-trader-bot`)
+
 ## Important Constraints
 
 - **DEMO mode only** with £500 capital limit — do not change to live without explicit owner instruction

@@ -23,9 +23,12 @@ jobs:
           fetch-depth: 50  # Need history to find last doc-update commit
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # All steps below run in the checkout workspace (not the Docker deployment dir)
+      # so git commands operate on the freshly-checked-out history
+
       - name: Check for code changes (skip if only .md files changed)
         id: check
-        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        shell: bash
         run: |
           # Get changed files in the last commit
           CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
@@ -41,7 +44,7 @@ jobs:
       - name: Skip if last commit was from docs-bot
         id: check_bot
         if: steps.check.outputs.skip != 'true'
-        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        shell: bash
         run: |
           LAST_MSG=$(git log -1 --pretty=%s)
           if echo "$LAST_MSG" | grep -q "\[docs-bot\]"; then
@@ -53,19 +56,17 @@ jobs:
 
       - name: Install dependencies
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
-        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
         run: pip install anthropic
 
       - name: Run documentation updater
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
-        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m scripts.update_docs
 
       - name: Commit and push README/CLAUDE.md changes
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
-        working-directory: C:\DevOps\AI_Trading\ai-trader-bot
+        shell: bash
         run: |
           # Check if any tracked docs changed
           git diff --quiet -- '*.md' && {

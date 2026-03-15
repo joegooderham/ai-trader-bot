@@ -118,17 +118,33 @@ Two separate Telegram bots keep trading signals and system ops separate:
 
 | Command | Description |
 |---------|-------------|
-| `/status` | Current bot status, open positions |
-| `/balance` | Account balance |
+| `/positions` | Open positions with P&L |
+| `/balance` | Account funds, equity, margin, available |
+| `/pltoday` | Today's realised + unrealised P&L |
+| `/plweek` | This week's running total by pair |
+| `/history` | Last 10 closed trades with outcome |
+| `/close <#>` | Close trade by number |
+| `/closeall` | Close all open positions |
+| `/closepair EURUSD` | Close a specific pair's position |
+| `/closeprofitable` | Close all profitable positions |
+| `/closelosing` | Close all losing positions |
+| `/pause` / `/resume` | Pause/resume trading |
+| `/status` | Bot health, services, open positions |
+| `/report` | Trigger daily report on demand |
+| `/setconfidence 50` | Adjust min confidence threshold % |
+| `/setrisk 2` | Adjust risk per trade % |
+| `/settings` | Show all current bot settings |
+| `/deploy` | Trigger CI/CD deployment via GitHub Actions |
+| `/deploystatus` | Show last 5 deployment runs |
 | `/datastatus` | IG vs yfinance data source status per pair |
-| `/accuracy` | Rolling LSTM prediction accuracy (24h/7d/30d) |
+| `/accuracy` | Rolling LSTM prediction accuracy (7d) |
 | `/model` | LSTM model info (version, params, last train) |
 | `/drift` | Drift detection status |
 | `/performance` | LSTM performance metrics |
 
 ## Configuration
 
-- **Environment variables**: Copy `.env.example` to `.env` and fill in IG, Telegram, and Anthropic API credentials
+- **Environment variables**: Copy `.env.example` to `.env` and fill in IG, Telegram, Anthropic API, and GitHub PAT credentials
 - **Trading parameters**: `config/config.yaml` — pairs, timeframes, confidence thresholds, risk settings, schedule times, LSTM architecture
 - **Config is loaded once** at import time by `bot/config.py`; changes require restart
 

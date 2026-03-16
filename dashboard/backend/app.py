@@ -291,41 +291,57 @@ _PRICE_CACHE_TTL = 60
 
 
 def _fetch_current_prices(pairs: list[str]) -> dict[str, float]:
-    """Fetch current mid prices from yfinance for the given pairs.
-    Returns {pair: price} dict. Uses a 60-second cache."""
+    """Fetch current prices for open positions.
+
+    Strategy (in order of preference):
+      1. yfinance Ticker.fast_info — one call per pair, reliable
+      2. SQLite candle table — last known close from the bot's own data
+      3. Give up — return empty (dashboard shows '—' for that pair)
+
+    Uses a 60-second cache so repeated calls don't hammer APIs."""
     global _price_cache, _price_cache_time
 
     now = time.time()
     if now - _price_cache_time < _PRICE_CACHE_TTL and all(p in _price_cache for p in pairs):
         return _price_cache
 
-    tickers = [_YF_TICKERS[p] for p in pairs if p in _YF_TICKERS]
-    if not tickers:
-        return {}
+    prices = {}
 
-    try:
-        # Fetch latest price for all tickers in one call
-        data = yf.download(tickers, period="1d", interval="1m", progress=False)
-        prices = {}
-        for pair in pairs:
-            ticker = _YF_TICKERS.get(pair)
-            if ticker and not data.empty:
-                try:
-                    # yf.download returns MultiIndex columns when multiple tickers
-                    if len(tickers) == 1:
-                        close_col = data["Close"]
-                    else:
-                        close_col = data["Close"][ticker]
-                    last_price = close_col.dropna().iloc[-1]
-                    prices[pair] = float(last_price)
-                except (KeyError, IndexError):
-                    pass
+    # Strategy 1: yfinance individual ticker lookups (more reliable than batch download)
+    for pair in pairs:
+        ticker_symbol = _YF_TICKERS.get(pair)
+        if not ticker_symbol:
+            continue
+        try:
+            ticker = yf.Ticker(ticker_symbol)
+            # fast_info is lightweight — doesn't download full history
+            price = ticker.fast_info.get("lastPrice") or ticker.fast_info.get("previousClose")
+            if price and price > 0:
+                prices[pair] = float(price)
+        except Exception as e:
+            logger.debug(f"yfinance failed for {pair}: {e}")
+
+    # Strategy 2: fall back to SQLite candle data for any pairs we couldn't get
+    missing = [p for p in pairs if p not in prices]
+    if missing:
+        try:
+            with get_db() as db:
+                for pair in missing:
+                    row = db.execute(
+                        "SELECT close FROM candles WHERE pair = ? ORDER BY timestamp DESC LIMIT 1",
+                        (pair,)
+                    ).fetchone()
+                    if row and row["close"]:
+                        prices[pair] = float(row["close"])
+                        logger.debug(f"Using SQLite candle price for {pair}: {row['close']}")
+        except Exception as e:
+            logger.debug(f"SQLite candle fallback failed: {e}")
+
+    if prices:
         _price_cache = prices
         _price_cache_time = now
-        return prices
-    except Exception as e:
-        logger.warning(f"yfinance price fetch failed: {e}")
-        return _price_cache  # Return stale cache if available
+
+    return prices
 
 
 def _calculate_unrealized_pl(positions: list[dict]) -> dict:

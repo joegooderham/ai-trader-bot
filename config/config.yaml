@@ -125,12 +125,43 @@ confidence:
     volume_confirmation: 5  # Volume validates the signal
 
 risk:
-  # Stop-loss distance as a multiple of ATR (Average True Range)
-  # ATR measures recent volatility — this makes stop-losses adaptive
-  stop_loss_atr_multiplier: 1.5
+  # ── Confidence-Tiered Risk Parameters ────────────────────────────────────
+  # Risk parameters scale with confidence score. Low-confidence trades play
+  # defensive (smaller size, wider stops, modest targets). High-confidence
+  # trades lean in (bigger size, tighter stops, let winners run).
+  #
+  # Tiers: low (50-65%), medium (66-80%), high (81%+)
+  # Each tier overrides the base values below.
+  confidence_tiers:
+    low:       # 50-65% confidence — defensive
+      risk_pct: 1.0                    # Risk 1% of capital (£5 on £500)
+      stop_loss_atr_multiplier: 2.0    # Wider stop — room to breathe
+      take_profit_ratio: 1.5           # Modest 1.5:1 reward
+      trailing_stop_activation_atr: 2.0
+      trailing_stop_trail_atr: 1.2
+    medium:    # 66-80% confidence — balanced
+      risk_pct: 2.0                    # Risk 2% of capital (£10 on £500)
+      stop_loss_atr_multiplier: 1.5    # Standard stop
+      take_profit_ratio: 2.0           # 2:1 reward
+      trailing_stop_activation_atr: 1.5
+      trailing_stop_trail_atr: 1.0
+    high:      # 81%+ confidence — aggressive
+      risk_pct: 3.0                    # Risk 3% of capital (£15 on £500)
+      stop_loss_atr_multiplier: 1.2    # Tighter stop — high conviction
+      take_profit_ratio: 3.0           # 3:1 reward — let winners run
+      trailing_stop_activation_atr: 1.0
+      trailing_stop_trail_atr: 0.8
 
-  # Take-profit distance relative to stop-loss
-  # 2.0 means for every £1 you risk, you aim to make £2
+  # ── Partial Profit-Taking ────────────────────────────────────────────────
+  # When price reaches partial_tp_pct of the take-profit distance, close
+  # partial_close_pct of the position to bank profit. The rest rides with
+  # a trailing stop. Set partial_tp_enabled to false to disable.
+  partial_tp_enabled: true
+  partial_tp_pct: 50             # Take partial profit at 50% of TP distance
+  partial_close_pct: 50          # Close 50% of the position
+
+  # ── Base risk values (used as fallback if tiers aren't configured) ───────
+  stop_loss_atr_multiplier: 1.5
   take_profit_ratio: 2.0
 
   # If the account loses this % in a single day, pause trading for 24 hours
@@ -138,6 +169,7 @@ risk:
   daily_loss_circuit_breaker_pct: 10.0
 
   # ── Trailing Stop-Loss (BACKLOG-007) ──────────────────────────────────────
+  # Base values — overridden by confidence tier when tiered risk is active.
   # Once a position reaches activation_atr_multiple × ATR in profit,
   # the stop-loss trails behind the price at trail_atr_multiple × ATR.
   # This locks in profit while letting winners run.

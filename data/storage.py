@@ -257,6 +257,30 @@ class TradeStorage:
         finally:
             conn.close()
 
+    def get_trade_by_deal_id(self, deal_id: str) -> dict:
+        """Fetch a trade record by IG deal_id. Returns dict or None."""
+        conn = _get_connection()
+        try:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM trades WHERE deal_id = ?", (deal_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def update_trade_field(self, deal_id: str, field: str, value):
+        """Update a single field on a trade identified by deal_id."""
+        conn = _get_connection()
+        try:
+            conn.execute(
+                f"UPDATE trades SET {field} = ? WHERE deal_id = ?",
+                (value, deal_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def get_trade_number(self, deal_id: str) -> int:
         """Look up the auto-incremented trade number for a deal_id."""
         conn = _get_connection()

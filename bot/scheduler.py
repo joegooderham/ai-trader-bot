@@ -251,7 +251,8 @@ def scan_markets():
     open_trades = broker.get_open_trades()
     open_pairs = {t.get("instrument") for t in open_trades}
 
-    if len(open_pairs) >= config.MAX_OPEN_POSITIONS:
+    # 0 = unlimited positions (learning/demo mode)
+    if config.MAX_OPEN_POSITIONS > 0 and len(open_pairs) >= config.MAX_OPEN_POSITIONS:
         logger.info(f"Maximum open positions ({config.MAX_OPEN_POSITIONS}) reached. Skipping scan.")
         return
 

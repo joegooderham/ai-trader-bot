@@ -14,6 +14,11 @@ trading:
     - USD_JPY    # US Dollar / Japanese Yen (very liquid)
     - AUD_USD    # Australian Dollar / US Dollar
     - USD_CAD    # US Dollar / Canadian Dollar
+    - USD_CHF    # US Dollar / Swiss Franc
+    - GBP_JPY   # British Pound / Japanese Yen (volatile cross)
+    - EUR_GBP    # Euro / British Pound
+    - EUR_JPY    # Euro / Japanese Yen
+    - NZD_USD    # New Zealand Dollar / US Dollar
 
   # ── Real-Time Position Monitoring (BACKLOG-004/GH#6) ───────────────────────
   # When enabled, the bot streams position updates via IG Lightstreamer instead
@@ -32,7 +37,8 @@ trading:
 
   # Maximum number of positions open at the same time
   # Keeping this low reduces overall risk exposure
-  max_open_positions: 25
+  # Set to 0 for unlimited positions (learning/demo mode)
+  max_open_positions: 0
 
   # Risk per trade as a percentage of your total capital
   # Example: 2% of £500 = £10 maximum loss per trade
@@ -97,11 +103,11 @@ confidence:
   #   Medium:        60  — balanced (recommended for month one)
   #   Aggressive:    50  — more trades, accepts weaker signals
   #   Very Aggressive: 40 — maximum trades (not recommended until proven)
-  aggressiveness_label: "medium"  # For your reference only — doesn't affect logic
+  aggressiveness_label: "aggressive"  # For your reference only — doesn't affect logic
 
   # Minimum score (0-100) to open a trade
   # Below this, the bot does nothing — better to miss a trade than lose money
-  min_to_trade: 60
+  min_to_trade: 50
 
   # Score required to hold a position past end-of-day close
   # This is intentionally very high — overnight holds should be rare

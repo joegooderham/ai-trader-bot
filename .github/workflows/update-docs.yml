@@ -27,7 +27,9 @@ jobs:
         id: check
         working-directory: C:\DevOps\AI_Trading\ai-trader-bot
         run: |
+          $ErrorActionPreference = 'Continue'
           $changed = git diff --name-only HEAD~1 HEAD 2>$null
+          $LASTEXITCODE = 0
           $codeChanged = $changed | Where-Object { $_ -notmatch '\.md$' }
           if (-not $codeChanged) {
             "skip=true" >> $env:GITHUB_OUTPUT
@@ -42,7 +44,9 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         working-directory: C:\DevOps\AI_Trading\ai-trader-bot
         run: |
+          $ErrorActionPreference = 'Continue'
           $lastMsg = git log -1 --pretty=%s
+          $LASTEXITCODE = 0
           if ($lastMsg -match '\[docs-bot\]') {
             "skip=true" >> $env:GITHUB_OUTPUT
             Write-Host "Last commit was from docs-bot — skipping to avoid loop"
@@ -66,7 +70,9 @@ jobs:
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
         working-directory: C:\DevOps\AI_Trading\ai-trader-bot
         run: |
+          $ErrorActionPreference = 'Continue'
           $diff = git diff --name-only -- '*.md'
+          $LASTEXITCODE = 0
           if (-not $diff) {
             Write-Host "No documentation changes to commit"
             exit 0

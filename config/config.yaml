@@ -33,7 +33,9 @@ trading:
 
   # How often to scan the market for new trade signals (in minutes)
   # Lower = more frequent checks but higher API usage
-  scan_interval_minutes: 15
+  # 5 min is the safe minimum with 10 pairs on H1 + H4 caching
+  # Budget: ~8,300 points/week vs 10,000 limit
+  scan_interval_minutes: 5
 
   # Maximum number of positions open at the same time
   # Keeping this low reduces overall risk exposure

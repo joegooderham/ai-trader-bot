@@ -26,6 +26,7 @@ from pathlib import Path
 
 import httpx
 import markdown
+import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -261,6 +262,129 @@ async def get_positions():
     except Exception as e:
         logger.error(f"Database error in positions: {e}")
         return {"positions": [], "db_status": "unavailable"}
+
+
+# ── Unrealized P&L ──────────────────────────────────────────────────────────
+
+# Pip-based P&L constants — mirrors risk/position_sizer.py
+# Pip value in GBP per pip per 1-lot IG mini contract (10,000 units)
+_PIP_VALUE_GBP = {
+    "EUR_USD": 0.79, "GBP_USD": 1.00, "USD_JPY": 0.67,
+    "AUD_USD": 0.63, "USD_CAD": 0.58, "USD_CHF": 0.79,
+    "GBP_JPY": 0.67, "EUR_GBP": 1.00, "EUR_JPY": 0.67, "NZD_USD": 0.63,
+}
+_PIP_SIZE = {"USD_JPY": 0.01, "GBP_JPY": 0.01, "EUR_JPY": 0.01}
+_DEFAULT_PIP_SIZE = 0.0001
+
+# yfinance ticker mapping — same pairs the bot trades
+_YF_TICKERS = {
+    "EUR_USD": "EURUSD=X", "GBP_USD": "GBPUSD=X", "USD_JPY": "USDJPY=X",
+    "AUD_USD": "AUDUSD=X", "USD_CAD": "USDCAD=X", "USD_CHF": "USDCHF=X",
+    "GBP_JPY": "GBPJPY=X", "EUR_GBP": "EURGBP=X", "EUR_JPY": "EURJPY=X",
+    "NZD_USD": "NZDUSD=X",
+}
+
+# Cache current prices for 60 seconds to avoid hammering yfinance
+_price_cache: dict = {}
+_price_cache_time: float = 0
+_PRICE_CACHE_TTL = 60
+
+
+def _fetch_current_prices(pairs: list[str]) -> dict[str, float]:
+    """Fetch current mid prices from yfinance for the given pairs.
+    Returns {pair: price} dict. Uses a 60-second cache."""
+    global _price_cache, _price_cache_time
+
+    now = time.time()
+    if now - _price_cache_time < _PRICE_CACHE_TTL and all(p in _price_cache for p in pairs):
+        return _price_cache
+
+    tickers = [_YF_TICKERS[p] for p in pairs if p in _YF_TICKERS]
+    if not tickers:
+        return {}
+
+    try:
+        # Fetch latest price for all tickers in one call
+        data = yf.download(tickers, period="1d", interval="1m", progress=False)
+        prices = {}
+        for pair in pairs:
+            ticker = _YF_TICKERS.get(pair)
+            if ticker and not data.empty:
+                try:
+                    # yf.download returns MultiIndex columns when multiple tickers
+                    if len(tickers) == 1:
+                        close_col = data["Close"]
+                    else:
+                        close_col = data["Close"][ticker]
+                    last_price = close_col.dropna().iloc[-1]
+                    prices[pair] = float(last_price)
+                except (KeyError, IndexError):
+                    pass
+        _price_cache = prices
+        _price_cache_time = now
+        return prices
+    except Exception as e:
+        logger.warning(f"yfinance price fetch failed: {e}")
+        return _price_cache  # Return stale cache if available
+
+
+def _calculate_unrealized_pl(positions: list[dict]) -> dict:
+    """Calculate unrealized P&L for open positions using pip-based math.
+    Same formula as broker/ig_client.py get_open_trades()."""
+    pairs = list({p["pair"] for p in positions if p.get("pair")})
+    prices = _fetch_current_prices(pairs)
+
+    total_upl = 0.0
+    enriched = []
+
+    for pos in positions:
+        pair = pos.get("pair", "")
+        current_price = prices.get(pair)
+        entry_price = pos.get("fill_price")
+        direction = pos.get("direction", "")
+        size = pos.get("size", 0)
+
+        upl = None
+        if current_price and entry_price and size:
+            pip_size = _PIP_SIZE.get(pair, _DEFAULT_PIP_SIZE)
+            pip_value = _PIP_VALUE_GBP.get(pair, 0.80)
+
+            if direction == "BUY":
+                price_diff = current_price - entry_price
+            else:
+                price_diff = entry_price - current_price
+
+            pips_moved = price_diff / pip_size
+            upl = round(pips_moved * pip_value * size, 2)
+            total_upl += upl
+
+        enriched.append({
+            **pos,
+            "current_price": current_price,
+            "unrealized_pl": upl,
+        })
+
+    return {
+        "positions": enriched,
+        "total_unrealized_pl": round(total_upl, 2),
+        "prices_available": len(prices) > 0,
+    }
+
+
+@app.get("/api/positions/live")
+async def get_positions_live():
+    """Open positions enriched with current prices and unrealized P&L.
+    Uses yfinance for current prices (no IG auth needed)."""
+    try:
+        with get_db() as db:
+            positions = db.execute(
+                "SELECT * FROM trades WHERE closed_at IS NULL ORDER BY opened_at DESC"
+            ).fetchall()
+        pos_list = [dict(p) for p in positions]
+        return _calculate_unrealized_pl(pos_list)
+    except Exception as e:
+        logger.error(f"Error in live positions: {e}")
+        return {"positions": [], "total_unrealized_pl": 0, "prices_available": False}
 
 
 # ── API Routes: Trade History ────────────────────────────────────────────────

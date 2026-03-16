@@ -209,6 +209,13 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 - **Data**: SQLite (trade history + candle cache), yfinance (historical data + refresh)
 - **Secrets**: Injected via GitHub Actions — never hardcode credentials in code or config files
 
+## Backlog
+
+| ID | Title | Description |
+|----|-------|-------------|
+| BACKLOG-011 | Multi-asset trading (Phase 2) | Add support for UK Stocks, US Stocks, ETFs, Indices, Commodities and Crypto via the existing IG API. Requires: epic code library per asset class, contract sizing updates in `position_sizer.py`, market hours awareness in `scheduler.py`, and asset class config in `config.yaml`. **Prerequisite:** Forex must be consistently profitable on demo before this is started. |
+| BACKLOG-012 | Cloudflare landing page branding | Update the Cloudflare landing/default page with custom branding or a fully custom page where possible. Replace generic Cloudflare placeholder with project-appropriate branding, logo, and messaging. |
+
 ## Pending Actions
 
 - **Branch `claude/telegram-pr-notifications-xfpGo`** is ready to merge into `main` — contains 15 new Telegram commands (close pair/profitable/losing, balance, P&L today/week, history, status, report, setconfidence, setrisk, settings, deploy, deploystatus) plus updated help, docs, and config

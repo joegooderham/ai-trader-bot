@@ -307,35 +307,33 @@ def _fetch_current_prices(pairs: list[str]) -> dict[str, float]:
 
     prices = {}
 
-    # Strategy 1: yfinance individual ticker lookups (more reliable than batch download)
-    for pair in pairs:
+    # Strategy 1: SQLite candle data — the bot saves live IG candles every scan,
+    # so this is the freshest and most reliable source we have. No external API needed.
+    try:
+        with get_db() as db:
+            for pair in pairs:
+                row = db.execute(
+                    "SELECT close FROM candles WHERE pair = ? ORDER BY timestamp DESC LIMIT 1",
+                    (pair,)
+                ).fetchone()
+                if row and row["close"]:
+                    prices[pair] = float(row["close"])
+    except Exception as e:
+        logger.warning(f"SQLite candle price fetch failed: {e}")
+
+    # Strategy 2: yfinance for any pairs missing from SQLite
+    missing = [p for p in pairs if p not in prices]
+    for pair in missing:
         ticker_symbol = _YF_TICKERS.get(pair)
         if not ticker_symbol:
             continue
         try:
             ticker = yf.Ticker(ticker_symbol)
-            # fast_info is lightweight — doesn't download full history
             price = ticker.fast_info.get("lastPrice") or ticker.fast_info.get("previousClose")
             if price and price > 0:
                 prices[pair] = float(price)
-        except Exception as e:
-            logger.debug(f"yfinance failed for {pair}: {e}")
-
-    # Strategy 2: fall back to SQLite candle data for any pairs we couldn't get
-    missing = [p for p in pairs if p not in prices]
-    if missing:
-        try:
-            with get_db() as db:
-                for pair in missing:
-                    row = db.execute(
-                        "SELECT close FROM candles WHERE pair = ? ORDER BY timestamp DESC LIMIT 1",
-                        (pair,)
-                    ).fetchone()
-                    if row and row["close"]:
-                        prices[pair] = float(row["close"])
-                        logger.debug(f"Using SQLite candle price for {pair}: {row['close']}")
-        except Exception as e:
-            logger.debug(f"SQLite candle fallback failed: {e}")
+        except Exception:
+            pass
 
     if prices:
         _price_cache = prices

@@ -51,6 +51,11 @@ class TelegramChatHandler:
         self.claude = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         self.app = None
 
+        # Notifier for dispatching formal trade-closed notifications
+        # so all trading activity appears in the Telegram trading channel
+        from notifications.telegram_bot import TelegramNotifier
+        self.notifier = TelegramNotifier()
+
         # Conversation history per chat — allows follow-up questions
         self._conversation_history = {}
 
@@ -98,6 +103,7 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("settings", self.cmd_settings))
         self.app.add_handler(CommandHandler("deploy", self.cmd_deploy))
         self.app.add_handler(CommandHandler("deploystatus", self.cmd_deploy_status))
+        self.app.add_handler(CommandHandler("integrity", self.cmd_integrity))
 
         return self.app
 
@@ -137,7 +143,8 @@ class TelegramChatHandler:
             "  /accuracy — LSTM prediction accuracy (7d)\n"
             "  /model — LSTM model info & last retrain\n"
             "  /drift — Model drift detection status\n"
-            "  /performance — LSTM performance metrics\n\n"
+            "  /performance — LSTM performance metrics\n"
+            "  /integrity — Profit integrity check\n\n"
             "*🔧 Tools:*\n"
             "  /today — Today's summary\n"
             "  /health — System health\n"
@@ -652,7 +659,12 @@ class TelegramChatHandler:
                 await update.message.reply_text("No open positions to close.")
                 return
 
-            # Persist each close to SQLite so dashboard stays in sync with Telegram
+            # Persist each close to SQLite and dispatch trade-closed notifications
+            try:
+                balance = self.broker.get_account_balance()
+            except Exception:
+                balance = 0
+
             for r in results:
                 deal_id = r.get("deal_id")
                 if deal_id:
@@ -663,6 +675,16 @@ class TelegramChatHandler:
                         "close_reason": "Manual close all",
                         "status": "CLOSED",
                     })
+                    trade_num = self.storage.get_trade_number(deal_id)
+                    self.notifier.trade_closed(
+                        pair=r.get("pair", "Unknown"),
+                        direction="N/A",
+                        close_price=r.get("close_price", 0),
+                        pl=r.get("pl", 0),
+                        reason="Manual close all via /closeall",
+                        account_balance=balance,
+                        trade_number=trade_num,
+                    )
 
             total_pl = sum(r.get("pl", 0) for r in results)
             pl_sign = "+" if total_pl >= 0 else ""
@@ -758,6 +780,21 @@ class TelegramChatHandler:
                     "status": "CLOSED",
                 })
 
+                # Dispatch formal trade-closed notification so all activity is visible
+                try:
+                    balance = self.broker.get_account_balance()
+                except Exception:
+                    balance = 0
+                self.notifier.trade_closed(
+                    pair=row["pair"] or "",
+                    direction=live_direction,
+                    close_price=result.get("close_price", 0),
+                    pl=pl,
+                    reason="Manual close via /close",
+                    account_balance=balance,
+                    trade_number=trade_number,
+                )
+
                 pl_sign = "+" if pl >= 0 else ""
                 emoji = "✅" if pl >= 0 else "❌"
                 await update.message.reply_text(
@@ -826,6 +863,21 @@ class TelegramChatHandler:
                         "close_reason": f"Manual close ({pair.replace('_', '/')})",
                         "status": "CLOSED",
                     })
+                    # Dispatch formal trade-closed notification
+                    try:
+                        balance = self.broker.get_account_balance()
+                    except Exception:
+                        balance = 0
+                    trade_num = self.storage.get_trade_number(deal_id)
+                    self.notifier.trade_closed(
+                        pair=pair,
+                        direction=direction,
+                        close_price=result.get("close_price", 0),
+                        pl=pl,
+                        reason=f"Manual close via /closepair",
+                        account_balance=balance,
+                        trade_number=trade_num,
+                    )
                     emoji = "✅" if pl >= 0 else "❌"
                     results_text += f"{emoji} {direction} {'+'if pl >= 0 else ''}£{pl:.2f}\n"
                 else:
@@ -884,6 +936,22 @@ class TelegramChatHandler:
                         "close_reason": "Manual close (profitable)",
                         "status": "CLOSED",
                     })
+                    # Dispatch formal trade-closed notification
+                    try:
+                        balance = self.broker.get_account_balance()
+                    except Exception:
+                        balance = 0
+                    raw_pair = trade.get("pair") or trade.get("instrument", "")
+                    trade_num = self.storage.get_trade_number(deal_id)
+                    self.notifier.trade_closed(
+                        pair=raw_pair,
+                        direction=direction,
+                        close_price=result.get("close_price", 0),
+                        pl=pl,
+                        reason="Manual close via /closeprofitable",
+                        account_balance=balance,
+                        trade_number=trade_num,
+                    )
                     results_text += f"✅ {pair} {direction}: +£{pl:.2f}\n"
                 else:
                     results_text += f"⚠️ {pair}: failed to close\n"
@@ -941,6 +1009,22 @@ class TelegramChatHandler:
                         "close_reason": "Manual close (losing)",
                         "status": "CLOSED",
                     })
+                    # Dispatch formal trade-closed notification
+                    try:
+                        balance = self.broker.get_account_balance()
+                    except Exception:
+                        balance = 0
+                    raw_pair = trade.get("pair") or trade.get("instrument", "")
+                    trade_num = self.storage.get_trade_number(deal_id)
+                    self.notifier.trade_closed(
+                        pair=raw_pair,
+                        direction=direction,
+                        close_price=result.get("close_price", 0),
+                        pl=pl,
+                        reason="Manual close via /closelosing",
+                        account_balance=balance,
+                        trade_number=trade_num,
+                    )
                     results_text += f"❌ {pair} {direction}: £{pl:.2f}\n"
                 else:
                     results_text += f"⚠️ {pair}: failed to close\n"
@@ -1625,6 +1709,32 @@ class TelegramChatHandler:
         except Exception as e:
             logger.error(f"Deploy status command failed: {e}")
             await update.message.reply_text(f"⚠️ Could not fetch deploy status: {str(e)[:200]}")
+
+    async def cmd_integrity(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Run a full profit integrity check and report results."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            from bot.analytics.integrity_monitor import IntegrityMonitor
+            from notifications.telegram_bot import TelegramNotifier
+
+            monitor = IntegrityMonitor(notifier=TelegramNotifier())
+            report = monitor.get_full_report()
+
+            # Telegram has a 4096 char limit — split if needed
+            if len(report) > 4000:
+                await update.message.reply_text(report[:4000], parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(report[4000:], parse_mode=ParseMode.MARKDOWN)
+            else:
+                await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Integrity command failed: {e}")
+            await update.message.reply_text(f"⚠️ Integrity check failed: {str(e)[:200]}")
 
     # ── Main Question Handler ─────────────────────────────────────────────────
 

@@ -40,7 +40,7 @@ trading:
 
   # Hard cap on maximum loss per trade in GBP
   # Overrides per_trade_risk_pct if the percentage calculation would exceed this amount
-  max_per_trade_spend: 5.0
+  max_per_trade_spend: 10.0
 
   # Candlestick timeframe for analysis
   # Options: M5 (5min), M15 (15min), H1 (1hour), H4 (4hour)
@@ -133,8 +133,8 @@ risk:
   # Once a position reaches activation_atr_multiple × ATR in profit,
   # the stop-loss trails behind the price at trail_atr_multiple × ATR.
   # This locks in profit while letting winners run.
-  trailing_stop_activation_atr: 1.5   # Activate trailing stop after 1.5×ATR profit
-  trailing_stop_trail_atr: 1.0        # Trail distance: 1.0×ATR behind current price
+  trailing_stop_activation_atr: 2.0   # Activate trailing stop after 2.0×ATR profit (was 1.5 — too early, caused breakeven closes)
+  trailing_stop_trail_atr: 1.5        # Trail distance: 1.5×ATR behind current price (was 1.0 — too tight, normal retracements hit stop)
 
   # ── Correlation Block (BACKLOG-005) ─────────────────────────────────────
   # If we already hold a position in a highly correlated pair, block the new trade.
@@ -143,7 +143,7 @@ risk:
   correlation_block_threshold: 0.75
 
   # When holding overnight, tighten stop-loss to protect this % of profit
-  overnight_profit_protection_pct: 75.0
+  overnight_profit_protection_pct: 50.0
 
 schedule:
   # Time (UTC) to close all positions at end of day
@@ -209,7 +209,7 @@ lstm:
   #
   # Once you're happy the LSTM is adding value, set shadow_mode to false
   # and the LSTM score will drive real trade decisions (50% weight).
-  shadow_mode: true
+  shadow_mode: false
 
   # ── Model Architecture ────────────────────────────────────────────────────
   # Two-layer LSTM with self-attention. Bigger hidden_size and more layers

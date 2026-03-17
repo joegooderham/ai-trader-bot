@@ -40,6 +40,7 @@ from bot.instance import InstanceManager
 from bot.engine.lstm import LSTMPredictor
 from bot.engine.lstm.drift import DriftDetector
 from bot.analytics.metrics import MetricsEngine
+from bot.analytics.integrity_monitor import IntegrityMonitor
 from broker.ig_streaming import IGStreamingClient
 import httpx
 
@@ -69,6 +70,10 @@ streaming_client = IGStreamingClient(broker)
 # Analytics — drift detection and metrics computation (Phase 2)
 drift_detector = DriftDetector()
 metrics_engine = MetricsEngine()
+
+# Profit integrity monitor — proactive detection of trading anomalies
+# Runs at three frequencies: quick (per-scan), hourly, and deep (4-hourly)
+integrity_monitor = IntegrityMonitor(notifier=notifier)
 
 # Track last reported P&L per position to only alert on significant changes
 _last_reported_pl: dict = {}
@@ -435,6 +440,10 @@ def _evaluate_pair(pair: str, available_capital: float):
             trade_number=trade_number
         )
 
+        # Quick integrity check — validate the trade's risk parameters immediately
+        # Catches SL/TP bugs before they compound (e.g. the breakeven bug)
+        integrity_monitor.quick_check(trade_result)
+
 
 def _on_streaming_position_update(position: dict):
     """
@@ -501,6 +510,17 @@ def _on_streaming_position_update(position: dict):
                 f"Streaming: {pair} {direction} | P&L: £{upl:.2f} "
                 f"(change: £{upl - last_pl:+.2f})"
             )
+
+            # Send Telegram alert for significant P&L changes so user sees all activity
+            pair_display = pair.replace("_", "/")
+            pl_sign = "+" if upl >= 0 else ""
+            change_sign = "+" if upl > last_pl else ""
+            notifier._send(
+                f"{emoji} *P&L Update — {pair_display}*\n"
+                f"Direction: {direction}\n"
+                f"P&L: *{pl_sign}£{upl:.2f}* ({change_sign}£{upl - last_pl:.2f})"
+            )
+
             _last_reported_pl[deal_id] = upl
 
     # Also apply trailing stop logic on every streaming update
@@ -926,6 +946,38 @@ def compute_analytics():
         logger.error(f"Analytics computation failed: {e}")
 
 
+def integrity_hourly_review():
+    """
+    Hourly profit integrity check — detects patterns like breakeven streaks,
+    win rate collapse, P&L drift, and short trade durations before they compound.
+    """
+    try:
+        result = integrity_monitor.hourly_review()
+        status = result.get("status", "UNKNOWN")
+        if status == "WARNING":
+            logger.warning(f"Integrity hourly review: {len(result.get('issues', []))} issue(s) detected")
+        else:
+            logger.debug(f"Integrity hourly review: {status}")
+    except Exception as e:
+        logger.error(f"Integrity hourly review failed: {e}")
+
+
+def integrity_deep_review():
+    """
+    Deep integrity analysis every 4 hours — per-pair profitability,
+    config effectiveness scoring, and actionable recommendations.
+    """
+    try:
+        result = integrity_monitor.deep_review()
+        status = result.get("status", "UNKNOWN")
+        if status == "WARNING":
+            logger.warning(f"Integrity deep review: {len(result.get('issues', []))} issue(s) detected")
+        else:
+            logger.debug(f"Integrity deep review: {status}")
+    except Exception as e:
+        logger.error(f"Integrity deep review failed: {e}")
+
+
 def _get_mcp_context(pair: str) -> dict:
     """Fetch market context from the MCP server. Returns empty dict on failure."""
     try:
@@ -1035,6 +1087,21 @@ def main():
         compute_analytics,
         "interval", minutes=60,
         id="analytics", name="Analytics Metrics"
+    )
+
+    # ── Profit Integrity Monitor (proactive anomaly detection) ────────────
+    # Hourly: checks for breakeven streaks, win rate collapse, P&L drift
+    scheduler.add_job(
+        integrity_hourly_review,
+        "interval", minutes=60,
+        id="integrity_hourly", name="Integrity Hourly Review"
+    )
+
+    # Deep review every 4 hours: per-pair profitability, config effectiveness
+    scheduler.add_job(
+        integrity_deep_review,
+        "interval", minutes=240,
+        id="integrity_deep", name="Integrity Deep Review"
     )
 
     logger.info("📅 Scheduler started with the following jobs:")

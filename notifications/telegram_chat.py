@@ -104,6 +104,8 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("deploy", self.cmd_deploy))
         self.app.add_handler(CommandHandler("deploystatus", self.cmd_deploy_status))
         self.app.add_handler(CommandHandler("integrity", self.cmd_integrity))
+        self.app.add_handler(CommandHandler("action", self.cmd_action))
+        self.app.add_handler(CommandHandler("discuss", self.cmd_discuss))
 
         return self.app
 
@@ -144,7 +146,9 @@ class TelegramChatHandler:
             "  /model — LSTM model info & last retrain\n"
             "  /drift — Model drift detection status\n"
             "  /performance — LSTM performance metrics\n"
-            "  /integrity — Profit integrity check\n\n"
+            "  /integrity — Profit integrity check\n"
+            "  /action `<#>` — Apply integrity recommendation\n"
+            "  /discuss `<#>` — Discuss a recommendation\n\n"
             "*🔧 Tools:*\n"
             "  /today — Today's summary\n"
             "  /health — System health\n"
@@ -1719,10 +1723,9 @@ class TelegramChatHandler:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
         try:
-            from bot.analytics.integrity_monitor import IntegrityMonitor
-            from notifications.telegram_bot import TelegramNotifier
-
-            monitor = IntegrityMonitor(notifier=TelegramNotifier())
+            # Use the shared integrity monitor from the scheduler so pending actions persist
+            import bot.scheduler as scheduler
+            monitor = scheduler.integrity_monitor
             report = monitor.get_full_report()
 
             # Telegram has a 4096 char limit — split if needed
@@ -1735,6 +1738,62 @@ class TelegramChatHandler:
         except Exception as e:
             logger.error(f"Integrity command failed: {e}")
             await update.message.reply_text(f"⚠️ Integrity check failed: {str(e)[:200]}")
+
+    async def cmd_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Apply an integrity recommendation. Usage: /action 1"""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        args = update.message.text.replace("/action", "", 1).strip()
+        if not args or not args.isdigit():
+            await update.message.reply_text(
+                "*Usage:* `/action <number>`\n\n"
+                "*Example:* `/action 1` — apply recommendation #1\n"
+                "Use `/integrity` to see available actions.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        action_id = int(args)
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            import bot.scheduler as scheduler
+            monitor = scheduler.integrity_monitor
+            result = monitor.apply_action(action_id)
+            await update.message.reply_text(result, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            logger.error(f"Action command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to apply action: {str(e)[:200]}")
+
+    async def cmd_discuss(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get detailed explanation of a recommendation. Usage: /discuss 1"""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        args = update.message.text.replace("/discuss", "", 1).strip()
+        if not args or not args.isdigit():
+            await update.message.reply_text(
+                "*Usage:* `/discuss <number>`\n\n"
+                "*Example:* `/discuss 1` — explain recommendation #1 in detail\n"
+                "Use `/integrity` to see available actions.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        action_id = int(args)
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            import bot.scheduler as scheduler
+            monitor = scheduler.integrity_monitor
+            description = monitor.describe_action(action_id)
+            await update.message.reply_text(description, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            logger.error(f"Discuss command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to describe action: {str(e)[:200]}")
 
     # ── Main Question Handler ─────────────────────────────────────────────────
 

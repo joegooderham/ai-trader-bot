@@ -256,7 +256,8 @@ def scan_markets():
     open_trades = broker.get_open_trades()
     open_pairs = {t.get("instrument") for t in open_trades}
 
-    if len(open_pairs) >= config.MAX_OPEN_POSITIONS:
+    # 0 = unlimited positions (learning/demo mode)
+    if config.MAX_OPEN_POSITIONS > 0 and len(open_pairs) >= config.MAX_OPEN_POSITIONS:
         logger.info(f"Maximum open positions ({config.MAX_OPEN_POSITIONS}) reached. Skipping scan.")
         return
 
@@ -404,7 +405,8 @@ def _evaluate_pair(pair: str, available_capital: float):
         direction=result.direction,
         entry_price=ind.current_price,
         atr=ind.atr,
-        available_capital=available_capital
+        available_capital=available_capital,
+        confidence_score=result.score
     )
 
     if size <= 0:
@@ -468,6 +470,17 @@ def _on_streaming_position_update(position: dict):
     # without this, the trade stays "open" in SQLite and the dashboard is wrong.
     if status == "DELETED":
         logger.info(f"Position closed via streaming: {pair} (deal {deal_id})")
+        # Persist the final P&L and close timestamp to the database
+        if deal_id:
+            try:
+                final_pl = upl or _last_reported_pl.get(deal_id, 0)
+                storage.update_trade_field(deal_id, "pl", final_pl)
+                storage.update_trade_field(deal_id, "closed_at", datetime.now(timezone.utc).isoformat())
+                storage.update_trade_field(deal_id, "status", "CLOSED")
+                storage.update_trade_field(deal_id, "close_reason", "stop_or_tp")
+                logger.info(f"Persisted close for {pair}: P&L £{final_pl:.2f}")
+            except Exception as e:
+                logger.warning(f"Failed to persist streaming close for {deal_id}: {e}")
         _last_reported_pl.pop(deal_id, None)
 
         close_price = position.get("closePrice") or position.get("level")
@@ -557,10 +570,113 @@ def monitor_positions():
     for trade in open_trades:
         unrealised_pl = float(trade.get("unrealizedPL", 0))
         pair = trade.get("pair") or trade.get("instrument")
+        deal_id = trade.get("dealId")
         logger.debug(f"Position {pair} | Unrealised P&L: £{unrealised_pl:.2f}")
+
+        # Enrich with confidence score from DB for tiered trailing stop params
+        if deal_id and not trade.get("confidence_score"):
+            try:
+                db_trade = storage.get_trade_by_deal_id(deal_id)
+                if db_trade and db_trade.get("confidence_score"):
+                    trade["confidence_score"] = db_trade["confidence_score"]
+            except Exception:
+                pass
+
+        # Partial profit-taking: close half the position when 50% of TP is reached
+        _check_partial_take_profit(trade)
 
         # Trailing stop-loss (BACKLOG-007): move stop closer as price moves in our favour
         _update_trailing_stop(trade)
+
+
+def _check_partial_take_profit(trade: dict):
+    """
+    Partial profit-taking: when price reaches a percentage of the TP distance,
+    close a portion of the position to bank profit. The rest rides with trailing stop.
+
+    This lets us lock in gains while keeping upside exposure. IG supports partial
+    closes natively — just close with a smaller size than the full position.
+
+    Uses a SQLite flag (breakdown field) to track whether partial TP has already fired
+    for this trade, so we only do it once.
+    """
+    if not config.PARTIAL_TP_ENABLED:
+        return
+
+    pair = trade.get("pair") or trade.get("instrument")
+    deal_id = trade.get("dealId")
+    direction = trade.get("direction", "BUY")
+    entry_price = float(trade.get("level") or trade.get("price", 0))
+    current_price = float(trade.get("currentPrice") or entry_price)
+    size = float(trade.get("dealSize", 0))
+    limit_level = trade.get("limitLevel")  # Take-profit price
+
+    if not entry_price or not current_price or not limit_level or size <= 1:
+        return  # Can't partial close 1 contract (IG minimum), need at least 2
+
+    tp_price = float(limit_level)
+
+    # Calculate how far price has moved towards TP
+    if direction == "BUY":
+        tp_distance = tp_price - entry_price
+        price_progress = current_price - entry_price
+    else:
+        tp_distance = entry_price - tp_price
+        price_progress = entry_price - current_price
+
+    if tp_distance <= 0:
+        return
+
+    progress_pct = price_progress / tp_distance
+
+    # Check if we've reached the partial TP threshold (e.g. 50% of TP distance)
+    if progress_pct < config.PARTIAL_TP_PCT:
+        return
+
+    # Check if we already took partial profit on this trade
+    # We use the DB to track this — check for a "PARTIAL_TP" flag in the trade record
+    try:
+        db_trade = storage.get_trade_by_deal_id(deal_id)
+        if db_trade and db_trade.get("breakdown") and "PARTIAL_TP" in str(db_trade.get("breakdown", "")):
+            return  # Already did partial close
+    except Exception:
+        pass
+
+    # Calculate partial close size — close e.g. 50% of position
+    close_size = round(size * config.PARTIAL_CLOSE_PCT, 1)
+    close_size = max(1.0, close_size)  # At least 1 contract
+    close_size = min(close_size, size - 1.0)  # Leave at least 1 contract open
+
+    if close_size <= 0:
+        return
+
+    logger.info(
+        f"Partial TP: {pair} {direction} | Progress: {progress_pct:.0%} of TP | "
+        f"Closing {close_size}/{size} contracts to bank profit"
+    )
+
+    result = broker.close_trade(deal_id, close_size, direction)
+    if result:
+        # Mark this trade as having taken partial profit and record the P&L
+        try:
+            partial_pl = result.get("pl") or result.get("profit_loss", 0)
+            existing_breakdown = str(db_trade.get("breakdown", "")) if db_trade else ""
+            storage.update_trade_field(
+                deal_id, "breakdown",
+                f"{existing_breakdown}|PARTIAL_TP:{close_size}@{current_price:.5f}|PL:{partial_pl:.2f}"
+            )
+        except Exception as e:
+            logger.debug(f"Failed to mark partial TP in DB: {e}")
+
+        notifier._send(
+            f"💰 *Partial Profit Taken*\n"
+            f"Pair: {pair} ({direction})\n"
+            f"Closed: {close_size} of {size} contracts\n"
+            f"Entry: {entry_price:.5f}\n"
+            f"Closed at: {current_price:.5f}\n"
+            f"Progress: {progress_pct:.0%} of take-profit\n"
+            f"Remaining: {size - close_size} contracts riding with trailing stop"
+        )
 
 
 def _update_trailing_stop(trade: dict):
@@ -593,8 +709,13 @@ def _update_trailing_stop(trade: dict):
         logger.debug(f"Could not calculate ATR for trailing stop on {pair}: {e}")
         return
 
-    activation_distance = config.TRAILING_STOP_ACTIVATION_ATR * atr
-    trail_distance = config.TRAILING_STOP_TRAIL_ATR * atr
+    # Use confidence-tiered trailing stop parameters if the trade has a confidence score
+    # This way high-conviction trades activate trailing sooner and trail tighter
+    confidence_score = trade.get("confidence_score") or 60.0
+    from risk.position_sizer import get_trailing_params
+    activation_atr, trail_atr = get_trailing_params(confidence_score)
+    activation_distance = activation_atr * atr
+    trail_distance = trail_atr * atr
 
     if direction == "BUY":
         price_move = current_price - entry_price
@@ -663,6 +784,20 @@ def force_close_all():
 
     if close_results:
         for result in close_results:
+            deal_id = result.get("deal_id")
+            pl = result.get("pl") or result.get("profit_loss", 0)
+
+            # Persist close data to DB so dashboard P&L is accurate
+            if deal_id:
+                try:
+                    storage.update_trade_field(deal_id, "pl", pl)
+                    storage.update_trade_field(deal_id, "closed_at", result.get("closed_at"))
+                    storage.update_trade_field(deal_id, "close_price", result.get("close_price", 0))
+                    storage.update_trade_field(deal_id, "close_reason", "eod_close")
+                    storage.update_trade_field(deal_id, "status", "CLOSED")
+                except Exception as e:
+                    logger.warning(f"Failed to persist close data for {deal_id}: {e}")
+
             balance = broker.get_account_balance()
             deal_id = result.get("deal_id")
             # Look up the trade number from when this position was opened
@@ -682,7 +817,7 @@ def force_close_all():
                 pair=result.get("pair", "Unknown"),
                 direction="N/A",
                 close_price=result.get("close_price", 0),
-                pl=result.get("pl") or result.get("profit_loss", 0),
+                pl=pl,
                 reason="End of day close",
                 account_balance=balance,
                 trade_number=trade_num

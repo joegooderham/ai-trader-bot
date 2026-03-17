@@ -3,17 +3,26 @@ import PLBadge from '../components/PLBadge'
 
 export default function Positions() {
   // Refresh every 15 seconds for near-real-time position updates
-  const { data, loading, error } = useApi('/api/positions', 15000)
+  const { data, loading, error } = useApi('/api/positions/live', 15000)
 
   if (loading) return <p className="text-gray-400">Loading positions...</p>
   if (error) return <p className="text-red-400">Error: {error}</p>
 
   const positions = data?.positions || []
+  const totalUpl = data?.total_unrealized_pl
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4 md:mb-6">
-        <h2 className="text-xl md:text-2xl font-bold">Open Positions</h2>
+        <div>
+          <h2 className="text-xl md:text-2xl font-bold">Open Positions</h2>
+          {totalUpl != null && positions.length > 0 && (
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-sm text-gray-500">Total P&L:</span>
+              <PLBadge value={totalUpl} />
+            </div>
+          )}
+        </div>
         <span className="text-sm text-gray-500">{positions.length} active</span>
       </div>
 
@@ -35,6 +44,7 @@ export default function Positions() {
 
 function PositionCard({ position }) {
   const isBuy = position.direction === 'BUY'
+  const isJpy = position.pair?.includes('JPY')
 
   return (
     <div className={`bg-gray-900 border rounded-lg p-4 md:p-5 ${
@@ -60,8 +70,13 @@ function PositionCard({ position }) {
       </div>
 
       {/* Price details grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
         <Detail label="Entry Price" value={position.fill_price} mono />
+        <Detail
+          label="Current Price"
+          value={position.current_price?.toFixed(isJpy ? 3 : 5)}
+          mono
+        />
         <Detail label="Size" value={`${position.size} lot${position.size !== 1 ? 's' : ''}`} />
         <Detail
           label="Stop Loss"
@@ -75,6 +90,12 @@ function PositionCard({ position }) {
           mono
           className="text-green-400"
         />
+        {position.unrealized_pl != null && (
+          <div>
+            <p className="text-xs text-gray-500 mb-0.5">Unrealized P&L</p>
+            <PLBadge value={position.unrealized_pl} />
+          </div>
+        )}
       </div>
 
       {/* Confidence + opened time */}

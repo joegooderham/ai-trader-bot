@@ -20,7 +20,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 50  # Need history to find last doc-update commit
+          fetch-depth: 50
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # All steps below run in the checkout workspace (not the Docker deployment dir)
@@ -30,29 +30,32 @@ jobs:
         id: check
         shell: bash
         run: |
-          # Get changed files in the last commit
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
-          CODE_CHANGED=$(echo "$CHANGED" | grep -v '\.md$' || true)
-          if [ -z "$CODE_CHANGED" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "Only markdown changes — skipping doc update"
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo "Code changes detected — will update docs"
-          fi
+          $ErrorActionPreference = 'Continue'
+          $changed = git diff --name-only HEAD~1 HEAD 2>$null
+          $LASTEXITCODE = 0
+          $codeChanged = $changed | Where-Object { $_ -notmatch '\.md$' }
+          if (-not $codeChanged) {
+            "skip=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Only markdown changes — skipping doc update"
+          } else {
+            "skip=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Code changes detected — will update docs"
+          }
 
       - name: Skip if last commit was from docs-bot
         id: check_bot
         if: steps.check.outputs.skip != 'true'
         shell: bash
         run: |
-          LAST_MSG=$(git log -1 --pretty=%s)
-          if echo "$LAST_MSG" | grep -q "\[docs-bot\]"; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "Last commit was from docs-bot — skipping to avoid loop"
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
+          $ErrorActionPreference = 'Continue'
+          $lastMsg = git log -1 --pretty=%s
+          $LASTEXITCODE = 0
+          if ($lastMsg -match '\[docs-bot\]') {
+            "skip=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Last commit was from docs-bot — skipping to avoid loop"
+          } else {
+            "skip=false" >> $env:GITHUB_OUTPUT
+          }
 
       - name: Install dependencies
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
@@ -68,17 +71,13 @@ jobs:
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
         shell: bash
         run: |
-          # Check if any tracked docs changed
-          git diff --quiet -- '*.md' && {
-            echo "No documentation changes to commit"
+          $ErrorActionPreference = 'Continue'
+          $diff = git diff --name-only -- '*.md'
+          $LASTEXITCODE = 0
+          if (-not $diff) {
+            Write-Host "No documentation changes to commit"
             exit 0
           }
-
-          # Stage only markdown files (READMEs + CLAUDE.md)
           git add -- '*.md'
-
-          # Commit with [docs-bot] tag so we can detect and skip on next run
           git commit -m "[docs-bot] Auto-update documentation from code changes"
-
-          # Push back to main
           git push origin main

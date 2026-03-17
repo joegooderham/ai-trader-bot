@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, Link, useLocation } from 'react-router-dom'
 import RunningPL from './RunningPL'
 
 const navItems = [
@@ -9,6 +9,7 @@ const navItems = [
   { to: '/summary', label: 'Summary' },
   { to: '/analytics', label: 'Analytics' },
   { to: '/wiki', label: 'Wiki' },
+  { to: '/backlog', label: 'Backlog' },
   { to: '/config', label: 'Config' },
 ]
 
@@ -63,10 +64,10 @@ export default function Layout({ children }) {
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
         lg:translate-x-0
       `}>
-        <div className="p-4 border-b border-gray-800">
+        <Link to="/" className="block p-4 border-b border-gray-800 hover:bg-gray-800 transition-colors">
           <h1 className="text-lg font-bold text-white">AI Trader</h1>
           <p className="text-xs text-gray-500 mt-1">Dashboard v1.0</p>
-        </div>
+        </Link>
         <div className="flex-1 py-4 overflow-y-auto">
           {navItems.map(({ to, label }) => (
             <NavLink
@@ -85,8 +86,17 @@ export default function Layout({ children }) {
             </NavLink>
           ))}
         </div>
-        <div className="p-4 border-t border-gray-800">
+        <div className="p-4 border-t border-gray-800 space-y-3">
           <StatusIndicator />
+          <button
+            onClick={() => window.location.href = '/cdn-cgi/access/logout'}
+            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-gray-500 hover:text-red-400 hover:bg-gray-800 rounded transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            Log Out
+          </button>
         </div>
       </nav>
 

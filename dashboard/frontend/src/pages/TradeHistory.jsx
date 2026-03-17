@@ -2,7 +2,10 @@ import { useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import PLBadge from '../components/PLBadge'
 
-const PAIRS = ['All', 'EUR_USD', 'GBP_USD', 'USD_JPY', 'AUD_USD']
+const PAIRS = [
+  'All', 'EUR_USD', 'GBP_USD', 'USD_JPY', 'AUD_USD', 'USD_CAD',
+  'USD_CHF', 'GBP_JPY', 'EUR_GBP', 'EUR_JPY', 'NZD_USD',
+]
 
 export default function TradeHistory() {
   const [selectedPair, setSelectedPair] = useState('All')

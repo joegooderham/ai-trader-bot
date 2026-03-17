@@ -7,6 +7,7 @@ export default function Overview() {
   // Auto-refresh every 30 seconds
   const { data, loading, error } = useApi('/api/overview', 30000)
   const { data: chartData } = useApi('/api/charts/pl-history?days=30')
+  const { data: liveData } = useApi('/api/positions/live', 30000)
 
   if (loading) return <LoadingSkeleton />
   if (error) return <ErrorMessage error={error} />
@@ -45,9 +46,9 @@ export default function Overview() {
             : 'None'}
         />
         <StatCard
-          label="All-Time P&L"
-          value={<PLBadge value={all_time.total_pl} />}
-          sub={`${all_time.total_trades} trades, ${all_time.win_rate}% win rate`}
+          label="Unrealized P&L"
+          value={<PLBadge value={liveData?.total_unrealized_pl || 0} />}
+          sub={liveData?.prices_available ? 'Live from latest candles' : 'Prices unavailable'}
         />
       </div>
 
@@ -99,11 +100,13 @@ export default function Overview() {
                   <th className="pb-2">Direction</th>
                   <th className="pb-2">Entry</th>
                   <th className="pb-2">Size</th>
+                  <th className="pb-2">Current</th>
+                  <th className="pb-2">P&L</th>
                   <th className="pb-2">Opened</th>
                 </tr>
               </thead>
               <tbody>
-                {open_positions.map((pos, i) => (
+                {(liveData?.positions || open_positions).map((pos, i) => (
                   <tr key={i} className="border-b border-gray-800/50">
                     <td className="py-2 font-medium text-white">{pos.pair?.replace('_', '/')}</td>
                     <td className={`py-2 ${pos.direction === 'BUY' ? 'text-profit' : 'text-loss'}`}>
@@ -111,6 +114,8 @@ export default function Overview() {
                     </td>
                     <td className="py-2 font-mono">{pos.fill_price}</td>
                     <td className="py-2">{pos.size} lot{pos.size !== 1 ? 's' : ''}</td>
+                    <td className="py-2 font-mono">{pos.current_price?.toFixed(pos.pair?.includes('JPY') ? 3 : 5) ?? '\u2014'}</td>
+                    <td className="py-2">{pos.unrealized_pl != null ? <PLBadge value={pos.unrealized_pl} /> : '\u2014'}</td>
                     <td className="py-2 text-gray-400">{pos.opened_at?.slice(0, 16)}</td>
                   </tr>
                 ))}
@@ -120,16 +125,19 @@ export default function Overview() {
 
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
-            {open_positions.map((pos, i) => (
+            {(liveData?.positions || open_positions).map((pos, i) => (
               <div key={i} className="bg-gray-800/50 rounded p-3">
                 <div className="flex justify-between items-center mb-1">
                   <span className="font-medium text-white">{pos.pair?.replace('_', '/')}</span>
-                  <span className={pos.direction === 'BUY' ? 'text-profit' : 'text-loss'}>
-                    {pos.direction}
-                  </span>
+                  {pos.unrealized_pl != null ? <PLBadge value={pos.unrealized_pl} /> : (
+                    <span className={pos.direction === 'BUY' ? 'text-profit' : 'text-loss'}>
+                      {pos.direction}
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs text-gray-400">
                   Entry: <span className="font-mono">{pos.fill_price}</span> | Size: {pos.size} lot{pos.size !== 1 ? 's' : ''}
+                  {pos.current_price && <> | Now: <span className="font-mono">{pos.current_price.toFixed(pos.pair?.includes('JPY') ? 3 : 5)}</span></>}
                 </div>
               </div>
             ))}

@@ -8,6 +8,7 @@ import Analytics from './pages/Analytics'
 import Wiki from './pages/Wiki'
 import WikiPage from './pages/WikiPage'
 import Config from './pages/Config'
+import Backlog from './pages/Backlog'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/wiki" element={<Wiki />} />
         <Route path="/wiki/:pageName" element={<WikiPage />} />
+        <Route path="/backlog" element={<Backlog />} />
         <Route path="/config" element={<Config />} />
       </Routes>
     </Layout>

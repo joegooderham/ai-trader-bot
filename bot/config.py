@@ -99,6 +99,15 @@ TRAILING_STOP_TRAIL_ATR          = _cfg["risk"].get("trailing_stop_trail_atr", 1
 CORRELATION_BLOCK_THRESHOLD      = _cfg["risk"].get("correlation_block_threshold", 0.75)
 OVERNIGHT_PROFIT_PROTECTION_PCT  = _cfg["risk"]["overnight_profit_protection_pct"]
 
+# ── Confidence-Tiered Risk ──────────────────────────────────────────────────
+# Parameters scale with confidence score: low/medium/high tiers
+CONFIDENCE_TIERS = _cfg["risk"].get("confidence_tiers", {})
+
+# ── Partial Profit-Taking ───────────────────────────────────────────────────
+PARTIAL_TP_ENABLED   = _cfg["risk"].get("partial_tp_enabled", False)
+PARTIAL_TP_PCT       = _cfg["risk"].get("partial_tp_pct", 50) / 100  # Convert to decimal
+PARTIAL_CLOSE_PCT    = _cfg["risk"].get("partial_close_pct", 50) / 100
+
 # ── Schedule ──────────────────────────────────────────────────────────────────
 
 EOD_CLOSE_TIME       = _cfg["schedule"]["eod_close_time"]

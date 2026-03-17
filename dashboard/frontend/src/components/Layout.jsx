@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, Link, useLocation } from 'react-router-dom'
 
 const navItems = [
   { to: '/', label: 'Overview' },
@@ -59,10 +59,10 @@ export default function Layout({ children }) {
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
         lg:translate-x-0
       `}>
-        <div className="p-4 border-b border-gray-800">
+        <Link to="/" className="block p-4 border-b border-gray-800 hover:bg-gray-800 transition-colors">
           <h1 className="text-lg font-bold text-white">AI Trader</h1>
           <p className="text-xs text-gray-500 mt-1">Dashboard v1.0</p>
-        </div>
+        </Link>
         <div className="flex-1 py-4 overflow-y-auto">
           {navItems.map(({ to, label }) => (
             <NavLink

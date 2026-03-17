@@ -118,17 +118,33 @@ Two separate Telegram bots keep trading signals and system ops separate:
 
 | Command | Description |
 |---------|-------------|
-| `/status` | Current bot status, open positions |
-| `/balance` | Account balance |
+| `/positions` | Open positions with P&L |
+| `/balance` | Account funds, equity, margin, available |
+| `/pltoday` | Today's realised + unrealised P&L |
+| `/plweek` | This week's running total by pair |
+| `/history` | Last 10 closed trades with outcome |
+| `/close <#>` | Close trade by number |
+| `/closeall` | Close all open positions |
+| `/closepair EURUSD` | Close a specific pair's position |
+| `/closeprofitable` | Close all profitable positions |
+| `/closelosing` | Close all losing positions |
+| `/pause` / `/resume` | Pause/resume trading |
+| `/status` | Bot health, services, open positions |
+| `/report` | Trigger daily report on demand |
+| `/setconfidence 50` | Adjust min confidence threshold % |
+| `/setrisk 2` | Adjust risk per trade % |
+| `/settings` | Show all current bot settings |
+| `/deploy` | Trigger CI/CD deployment via GitHub Actions |
+| `/deploystatus` | Show last 5 deployment runs |
 | `/datastatus` | IG vs yfinance data source status per pair |
-| `/accuracy` | Rolling LSTM prediction accuracy (24h/7d/30d) |
+| `/accuracy` | Rolling LSTM prediction accuracy (7d) |
 | `/model` | LSTM model info (version, params, last train) |
 | `/drift` | Drift detection status |
 | `/performance` | LSTM performance metrics |
 
 ## Configuration
 
-- **Environment variables**: Copy `.env.example` to `.env` and fill in IG, Telegram, and Anthropic API credentials
+- **Environment variables**: Copy `.env.example` to `.env` and fill in IG, Telegram, Anthropic API, and GitHub PAT credentials
 - **Trading parameters**: `config/config.yaml` — pairs, timeframes, confidence thresholds, risk settings, schedule times, LSTM architecture
 - **Config is loaded once** at import time by `bot/config.py`; changes require restart
 
@@ -192,6 +208,23 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 - **Current**: Python, Docker, IG Group API, Telegram, APScheduler, FastAPI, Anthropic Claude API, PyTorch (LSTM)
 - **Data**: SQLite (trade history + candle cache), yfinance (historical data + refresh)
 - **Secrets**: Injected via GitHub Actions — never hardcode credentials in code or config files
+
+## Backlog
+
+| ID | Title | Description |
+|----|-------|-------------|
+| BACKLOG-011 | Multi-asset trading (Phase 2) | Add support for UK Stocks, US Stocks, ETFs, Indices, Commodities and Crypto via the existing IG API. Requires: epic code library per asset class, contract sizing updates in `position_sizer.py`, market hours awareness in `scheduler.py`, and asset class config in `config.yaml`. **Prerequisite:** Forex must be consistently profitable on demo before this is started. |
+| BACKLOG-012 | Cloudflare landing page branding | Update the Cloudflare landing/default page with custom branding or a fully custom page where possible. Replace generic Cloudflare placeholder with project-appropriate branding, logo, and messaging. |
+| BACKLOG-013 | IG Client Sentiment integration | Add IG Client Sentiment API as a confidence modifier. Contrarian indicator: when >75% retail are positioned one way, bias towards the opposite. Free, already authenticated via IG API. Plug into MCP context → confidence scoring. |
+| BACKLOG-014 | FRED macro data integration | Integrate Federal Reserve (FRED) API for interest rate differentials, CPI, and other macro data. Use as directional bias filter in confidence scoring. Free API, `fredapi` Python library. |
+| BACKLOG-015 | Myfxbook sentiment integration | Add Myfxbook community sentiment (% long/short across ~100k accounts) as a secondary sentiment source. Cross-validates IG Client Sentiment for stronger contrarian signals. Free API. |
+| BACKLOG-016 | CFTC COT positioning data | Integrate weekly Commitment of Traders data for institutional positioning bias. Use as directional filter — reduce confidence on trades opposing large speculator positioning. Free, `cot_reports` Python library. |
+
+## Pending Actions
+
+- **Branch `claude/telegram-pr-notifications-xfpGo`** is ready to merge into `main` — contains 15 new Telegram commands (close pair/profitable/losing, balance, P&L today/week, history, status, report, setconfidence, setrisk, settings, deploy, deploystatus) plus updated help, docs, and config
+- **After merging**: add `GITHUB_PAT` secret in GitHub Settings → Secrets (needs `repo` + `workflow` scopes) for the `/deploy` and `/deploystatus` commands to work
+- **Optional**: also add `GITHUB_REPO` secret (defaults to `joegooderham/ai-trader-bot`)
 
 ## Important Constraints
 

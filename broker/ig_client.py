@@ -909,6 +909,58 @@ class IGClient:
         reverse = {v: k for k, v in IG_EPICS.items()}
         return reverse.get(epic, epic)
 
+    # ── Client Sentiment ─────────────────────────────────────────────────────
+
+    def get_client_sentiment(self, pair: str) -> Optional[dict]:
+        """
+        Fetch IG client sentiment for a market — % of IG retail clients long vs short.
+
+        This is a well-known contrarian indicator: when a large majority of retail
+        traders are positioned one way, the market often moves against them.
+        Academic research (e.g. FXCM's Speculative Sentiment Index studies) shows
+        retail positioning is a reliable contrarian signal, especially above 70-75%.
+
+        Returns:
+            dict with longPercentage, shortPercentage, totalPositions
+            or None on failure
+
+        IG API Docs: GET /clientsentiment/{marketId}
+        Note: The sentiment endpoint uses marketId (e.g. "EURUSD"), NOT the
+        epic code (e.g. "CS.D.EURUSD.MINI.IP"). For forex pairs the marketId
+        is simply the pair name without the underscore.
+        """
+        # Convert pair format: "EUR_USD" → "EURUSD" (IG's marketId format)
+        market_id = pair.replace("_", "")
+
+        try:
+            # IG client sentiment endpoint uses marketId, not epic
+            data = self._get(f"/clientsentiment/{market_id}", version="1")
+            sentiments = data.get("clientSentiments", [data] if "marketId" in data else [])
+
+            if not sentiments:
+                logger.debug(f"No client sentiment data returned for {pair}")
+                return None
+
+            s = sentiments[0]
+            result = {
+                "pair": pair,
+                "long_percentage": float(s.get("longPositionPercentage", 50)),
+                "short_percentage": float(s.get("shortPositionPercentage", 50)),
+                # IG doesn't always return totalPositions — default to 0 if missing
+                "total_positions": int(s.get("totalPositions", 0)),
+            }
+
+            logger.debug(
+                f"IG sentiment for {pair}: "
+                f"{result['long_percentage']:.0f}% long / "
+                f"{result['short_percentage']:.0f}% short"
+            )
+            return result
+
+        except Exception as e:
+            logger.warning(f"get_client_sentiment({pair}) failed: {e}")
+            return None
+
     def test_connection(self) -> bool:
         """Quick connection test."""
         try:

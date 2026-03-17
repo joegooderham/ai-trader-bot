@@ -67,13 +67,23 @@ class TelegramNotifier:
             try:
                 # Fresh Bot per call — avoids stale connection pool from closed loops
                 bot = Bot(token=token)
-                loop.run_until_complete(
-                    bot.send_message(
-                        chat_id=self.chat_id,
-                        text=message,
-                        parse_mode=ParseMode.MARKDOWN
+                try:
+                    loop.run_until_complete(
+                        bot.send_message(
+                            chat_id=self.chat_id,
+                            text=message,
+                            parse_mode=ParseMode.MARKDOWN
+                        )
                     )
-                )
+                except Exception:
+                    # Markdown parse failed — retry without formatting so the message still arrives
+                    logger.warning("Markdown parse failed, resending without formatting")
+                    loop.run_until_complete(
+                        bot.send_message(
+                            chat_id=self.chat_id,
+                            text=message
+                        )
+                    )
             finally:
                 loop.close()
             self._last_send_time = time.monotonic()

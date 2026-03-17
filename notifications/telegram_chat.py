@@ -51,6 +51,11 @@ class TelegramChatHandler:
         self.claude = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         self.app = None
 
+        # Notifier for dispatching formal trade-closed notifications
+        # so all trading activity appears in the Telegram trading channel
+        from notifications.telegram_bot import TelegramNotifier
+        self.notifier = TelegramNotifier()
+
         # Conversation history per chat — allows follow-up questions
         self._conversation_history = {}
 
@@ -83,6 +88,24 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("drift", self.cmd_drift))
         self.app.add_handler(CommandHandler("performance", self.cmd_performance))
         self.app.add_handler(CommandHandler("help", self.cmd_help))
+        # ── New Trade Command Handlers ────────────────────────────────────────
+        self.app.add_handler(CommandHandler("closepair", self.cmd_close_pair))
+        self.app.add_handler(CommandHandler("closeprofitable", self.cmd_close_profitable))
+        self.app.add_handler(CommandHandler("closelosing", self.cmd_close_losing))
+        self.app.add_handler(CommandHandler("balance", self.cmd_balance))
+        self.app.add_handler(CommandHandler("pltoday", self.cmd_pl_today))
+        self.app.add_handler(CommandHandler("plweek", self.cmd_pl_week))
+        self.app.add_handler(CommandHandler("history", self.cmd_history))
+        self.app.add_handler(CommandHandler("status", self.cmd_status))
+        self.app.add_handler(CommandHandler("report", self.cmd_report))
+        self.app.add_handler(CommandHandler("setconfidence", self.cmd_set_confidence))
+        self.app.add_handler(CommandHandler("setrisk", self.cmd_set_risk))
+        self.app.add_handler(CommandHandler("settings", self.cmd_settings))
+        self.app.add_handler(CommandHandler("deploy", self.cmd_deploy))
+        self.app.add_handler(CommandHandler("deploystatus", self.cmd_deploy_status))
+        self.app.add_handler(CommandHandler("integrity", self.cmd_integrity))
+        self.app.add_handler(CommandHandler("action", self.cmd_action))
+        self.app.add_handler(CommandHandler("discuss", self.cmd_discuss))
 
         return self.app
 
@@ -91,34 +114,55 @@ class TelegramChatHandler:
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show available commands and example questions."""
         message = (
-            "*🤖 AI Trader Bot — Chat Interface*\n"
-            "─────────────────────────────\n"
-            "You can ask me anything in plain English, or use these shortcuts:\n\n"
-            "*/today* — Today's trades and P&L\n"
-            "*/positions* — Currently open positions\n"
-            "*/health* — System health status\n"
-            "*/plan* — Tomorrow's trading plan\n"
-            "*/trades* — Recent trades with index numbers\n"
-            "*/close* `<#>` — Close a specific trade (e.g. `/close 5`)\n"
-            "*/closeall* — Close all open positions now\n"
-            "*/pause* — Pause bot from opening new trades\n"
-            "*/resume* — Resume trading after a pause\n"
-            "*/stats* — All-time performance stats\n"
-            "*/datastatus* — Check IG vs yfinance status per pair\n"
-            "*/accuracy* — LSTM prediction accuracy (7d)\n"
-            "*/model* — Current LSTM model info and last retrain\n"
-            "*/drift* — Model drift detection status\n"
-            "*/performance* — LSTM performance metrics\n"
-            "*/fallbacktest* — Test yfinance backup data source\n"
-            "*/query* `<question>` — Query trade database in plain English\n"
-            "*/devops* — Today's code changes (git log)\n"
-            "*/backtest* — Run LSTM vs indicator-only simulation\n\n"
-            "*Or just ask naturally, for example:*\n"
-            "_\"How did EUR/USD perform this week?\"_\n"
-            "_\"Why did the bot make that last trade?\"_\n"
-            "_\"What's my win rate this month?\"_\n"
-            "_\"Should I change any settings?\"_\n"
-            "_\"What's happening in the markets tomorrow?\"_"
+            "*🤖 AI Trader Bot — Command List*\n"
+            "═════════════════════\n\n"
+            "*📊 Positions & Account:*\n"
+            "  /positions — Open positions with P&L\n"
+            "  /balance — Account funds & equity\n"
+            "  /pltoday — Today's realised + unrealised P&L\n"
+            "  /plweek — This week's running total\n"
+            "  /history — Last 10 closed trades\n"
+            "  /trades — Recent trades with index numbers\n\n"
+            "*🔒 Close Commands:*\n"
+            "  /close `<#>` — Close trade by number\n"
+            "  /closeall — Close all positions\n"
+            "  /closepair `EURUSD` — Close a specific pair\n"
+            "  /closeprofitable — Close all winning positions\n"
+            "  /closelosing — Close all losing positions\n\n"
+            "*🤖 Bot Control:*\n"
+            "  /pause — Stop opening new trades\n"
+            "  /resume — Re-enable trading\n"
+            "  /status — Bot health & services\n"
+            "  /report — Trigger daily report now\n\n"
+            "*⚙️ Strategy:*\n"
+            "  /setconfidence `50` — Set min confidence %\n"
+            "  /setrisk `2` — Set risk per trade %\n"
+            "  /settings — Show all current settings\n\n"
+            "*🚀 Deploy:*\n"
+            "  /deploy — Trigger CI/CD deployment\n"
+            "  /deploystatus — Last 5 deploy runs\n\n"
+            "*📈 Analytics:*\n"
+            "  /accuracy — LSTM prediction accuracy (7d)\n"
+            "  /model — LSTM model info & last retrain\n"
+            "  /drift — Model drift detection status\n"
+            "  /performance — LSTM performance metrics\n"
+            "  /integrity — Profit integrity check\n"
+            "  /action `<#>` — Apply integrity recommendation\n"
+            "  /discuss `<#>` — Discuss a recommendation\n\n"
+            "*🔧 Tools:*\n"
+            "  /today — Today's summary\n"
+            "  /health — System health\n"
+            "  /plan — Tomorrow's trading plan\n"
+            "  /stats — All-time performance\n"
+            "  /datastatus — IG vs yfinance status\n"
+            "  /query `<question>` — Query database\n"
+            "  /devops — Today's git commits\n"
+            "  /backtest — Run LSTM backtest\n"
+            "  /fallbacktest — Test yfinance backup\n\n"
+            "*💬 Or just ask naturally:*\n"
+            '_"How did EUR/USD do this week?"_\n'
+            '_"Why did the bot take that last trade?"_\n'
+            '_"What\'s my win rate?"_'
         )
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
@@ -619,6 +663,33 @@ class TelegramChatHandler:
                 await update.message.reply_text("No open positions to close.")
                 return
 
+            # Persist each close to SQLite and dispatch trade-closed notifications
+            try:
+                balance = self.broker.get_account_balance()
+            except Exception:
+                balance = 0
+
+            for r in results:
+                deal_id = r.get("deal_id")
+                if deal_id:
+                    self.storage.update_trade(deal_id, {
+                        "close_price": r.get("close_price"),
+                        "pl": r.get("pl", 0),
+                        "closed_at": r.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                        "close_reason": "Manual close all",
+                        "status": "CLOSED",
+                    })
+                    trade_num = self.storage.get_trade_number(deal_id)
+                    self.notifier.trade_closed(
+                        pair=r.get("pair", "Unknown"),
+                        direction="N/A",
+                        close_price=r.get("close_price", 0),
+                        pl=r.get("pl", 0),
+                        reason="Manual close all via /closeall",
+                        account_balance=balance,
+                        trade_number=trade_num,
+                    )
+
             total_pl = sum(r.get("pl", 0) for r in results)
             pl_sign = "+" if total_pl >= 0 else ""
             pl_emoji = "✅" if total_pl >= 0 else "❌"
@@ -703,15 +774,31 @@ class TelegramChatHandler:
 
             if result:
                 pl = result.get("pl", 0)
-                # Persist close data to DB so dashboard P&L is accurate
+
+                # Persist the close to SQLite so dashboard stays in sync with Telegram
+                self.storage.update_trade(deal_id, {
+                    "close_price": result.get("close_price"),
+                    "pl": pl,
+                    "closed_at": result.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                    "close_reason": "Manual close",
+                    "status": "CLOSED",
+                })
+
+                # Dispatch formal trade-closed notification so all activity is visible
                 try:
-                    self.storage.update_trade_field(deal_id, "pl", pl)
-                    self.storage.update_trade_field(deal_id, "closed_at", result.get("closed_at"))
-                    self.storage.update_trade_field(deal_id, "close_price", result.get("close_price", 0))
-                    self.storage.update_trade_field(deal_id, "close_reason", "manual_close")
-                    self.storage.update_trade_field(deal_id, "status", "CLOSED")
-                except Exception as e:
-                    logger.warning(f"Failed to persist manual close for {deal_id}: {e}")
+                    balance = self.broker.get_account_balance()
+                except Exception:
+                    balance = 0
+                self.notifier.trade_closed(
+                    pair=row["pair"] or "",
+                    direction=live_direction,
+                    close_price=result.get("close_price", 0),
+                    pl=pl,
+                    reason="Manual close via /close",
+                    account_balance=balance,
+                    trade_number=trade_number,
+                )
+
                 pl_sign = "+" if pl >= 0 else ""
                 emoji = "✅" if pl >= 0 else "❌"
                 await update.message.reply_text(
@@ -729,6 +816,237 @@ class TelegramChatHandler:
         except Exception as e:
             logger.error(f"Close command failed: {e}")
             await update.message.reply_text(f"⚠️ Error closing trade: {str(e)[:200]}")
+
+    async def cmd_close_pair(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Close a specific pair's position. Usage: /closepair EURUSD or /closepair EUR/USD"""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        raw = update.message.text.replace("/closepair", "", 1).strip().upper()
+        if not raw:
+            await update.message.reply_text(
+                "⚠️ *Usage:* `/closepair EURUSD` or `/closepair EUR/USD`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        # Normalise: "EUR/USD" → "EUR_USD", "EURUSD" → "EUR_USD"
+        pair = raw.replace("/", "_")
+        if "_" not in pair and len(pair) == 6:
+            pair = pair[:3] + "_" + pair[3:]
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            open_trades = self.broker.get_open_trades()
+            matching = [t for t in open_trades if (t.get("pair") or t.get("instrument")) == pair]
+
+            if not matching:
+                await update.message.reply_text(
+                    f"⚠️ No open position found for {pair.replace('_', '/')}."
+                )
+                return
+
+            total_pl = 0
+            results_text = ""
+            for trade in matching:
+                deal_id = trade.get("dealId")
+                size = float(trade.get("dealSize", 1))
+                direction = trade.get("direction", "BUY")
+                result = self.broker.close_trade(deal_id, size, direction)
+
+                if result:
+                    pl = result.get("pl", 0)
+                    total_pl += pl
+                    # Persist to SQLite
+                    self.storage.update_trade(deal_id, {
+                        "close_price": result.get("close_price"),
+                        "pl": pl,
+                        "closed_at": result.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                        "close_reason": f"Manual close ({pair.replace('_', '/')})",
+                        "status": "CLOSED",
+                    })
+                    # Dispatch formal trade-closed notification
+                    try:
+                        balance = self.broker.get_account_balance()
+                    except Exception:
+                        balance = 0
+                    trade_num = self.storage.get_trade_number(deal_id)
+                    self.notifier.trade_closed(
+                        pair=pair,
+                        direction=direction,
+                        close_price=result.get("close_price", 0),
+                        pl=pl,
+                        reason=f"Manual close via /closepair",
+                        account_balance=balance,
+                        trade_number=trade_num,
+                    )
+                    emoji = "✅" if pl >= 0 else "❌"
+                    results_text += f"{emoji} {direction} {'+'if pl >= 0 else ''}£{pl:.2f}\n"
+                else:
+                    results_text += f"⚠️ Failed to close {deal_id}\n"
+
+            pl_emoji = "✅" if total_pl >= 0 else "❌"
+            await update.message.reply_text(
+                f"*{pl_emoji} {pair.replace('_', '/')} CLOSED*\n"
+                f"─────────────────────\n"
+                f"{results_text}"
+                f"─────────────────────\n"
+                f"*Total P&L:* {'+'if total_pl >= 0 else ''}£{total_pl:.2f}\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+        except Exception as e:
+            logger.error(f"Close pair command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to close {pair.replace('_', '/')}: {str(e)[:200]}")
+
+    async def cmd_close_profitable(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Close only positions currently in profit."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            open_trades = self.broker.get_open_trades()
+            profitable = [t for t in open_trades if float(t.get("unrealizedPL", 0)) > 0]
+
+            if not profitable:
+                await update.message.reply_text("📊 No profitable positions to close right now.")
+                return
+
+            total_pl = 0
+            closed_count = 0
+            results_text = ""
+
+            for trade in profitable:
+                deal_id = trade.get("dealId")
+                pair = (trade.get("pair") or trade.get("instrument", "")).replace("_", "/")
+                size = float(trade.get("dealSize", 1))
+                direction = trade.get("direction", "BUY")
+                result = self.broker.close_trade(deal_id, size, direction)
+
+                if result:
+                    pl = result.get("pl", 0)
+                    total_pl += pl
+                    closed_count += 1
+                    self.storage.update_trade(deal_id, {
+                        "close_price": result.get("close_price"),
+                        "pl": pl,
+                        "closed_at": result.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                        "close_reason": "Manual close (profitable)",
+                        "status": "CLOSED",
+                    })
+                    # Dispatch formal trade-closed notification
+                    try:
+                        balance = self.broker.get_account_balance()
+                    except Exception:
+                        balance = 0
+                    raw_pair = trade.get("pair") or trade.get("instrument", "")
+                    trade_num = self.storage.get_trade_number(deal_id)
+                    self.notifier.trade_closed(
+                        pair=raw_pair,
+                        direction=direction,
+                        close_price=result.get("close_price", 0),
+                        pl=pl,
+                        reason="Manual close via /closeprofitable",
+                        account_balance=balance,
+                        trade_number=trade_num,
+                    )
+                    results_text += f"✅ {pair} {direction}: +£{pl:.2f}\n"
+                else:
+                    results_text += f"⚠️ {pair}: failed to close\n"
+
+            await update.message.reply_text(
+                f"*✅ PROFITABLE POSITIONS CLOSED*\n"
+                f"─────────────────────\n"
+                f"*Closed:* {closed_count}/{len(profitable)} position(s)\n"
+                f"{results_text}"
+                f"─────────────────────\n"
+                f"*Total Realised P&L:* +£{total_pl:.2f}\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+        except Exception as e:
+            logger.error(f"Close profitable command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to close profitable positions: {str(e)[:200]}")
+
+    async def cmd_close_losing(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Close only positions currently at a loss."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            open_trades = self.broker.get_open_trades()
+            losing = [t for t in open_trades if float(t.get("unrealizedPL", 0)) < 0]
+
+            if not losing:
+                await update.message.reply_text("📊 No losing positions to close right now.")
+                return
+
+            total_pl = 0
+            closed_count = 0
+            results_text = ""
+
+            for trade in losing:
+                deal_id = trade.get("dealId")
+                pair = (trade.get("pair") or trade.get("instrument", "")).replace("_", "/")
+                size = float(trade.get("dealSize", 1))
+                direction = trade.get("direction", "BUY")
+                result = self.broker.close_trade(deal_id, size, direction)
+
+                if result:
+                    pl = result.get("pl", 0)
+                    total_pl += pl
+                    closed_count += 1
+                    self.storage.update_trade(deal_id, {
+                        "close_price": result.get("close_price"),
+                        "pl": pl,
+                        "closed_at": result.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                        "close_reason": "Manual close (losing)",
+                        "status": "CLOSED",
+                    })
+                    # Dispatch formal trade-closed notification
+                    try:
+                        balance = self.broker.get_account_balance()
+                    except Exception:
+                        balance = 0
+                    raw_pair = trade.get("pair") or trade.get("instrument", "")
+                    trade_num = self.storage.get_trade_number(deal_id)
+                    self.notifier.trade_closed(
+                        pair=raw_pair,
+                        direction=direction,
+                        close_price=result.get("close_price", 0),
+                        pl=pl,
+                        reason="Manual close via /closelosing",
+                        account_balance=balance,
+                        trade_number=trade_num,
+                    )
+                    results_text += f"❌ {pair} {direction}: £{pl:.2f}\n"
+                else:
+                    results_text += f"⚠️ {pair}: failed to close\n"
+
+            await update.message.reply_text(
+                f"*❌ LOSING POSITIONS CLOSED*\n"
+                f"─────────────────────\n"
+                f"*Closed:* {closed_count}/{len(losing)} position(s)\n"
+                f"{results_text}"
+                f"─────────────────────\n"
+                f"*Total Realised P&L:* £{total_pl:.2f}\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+        except Exception as e:
+            logger.error(f"Close losing command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to close losing positions: {str(e)[:200]}")
 
     async def cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Pause the bot from opening new trades."""
@@ -809,6 +1127,693 @@ class TelegramChatHandler:
         except Exception as e:
             logger.error(f"Backtest command failed: {e}")
             await update.message.reply_text(f"Backtest failed: {str(e)[:300]}")
+
+    # ── Position & Account Commands ──────────────────────────────────────────
+
+    async def cmd_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show account funds, equity, margin used, and available capital."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            summary = self.broker.get_account_summary()
+            balance = summary.get("balance", 0)
+            deposit = summary.get("deposit", 0)
+            pl = summary.get("profit_loss", 0)
+            available = summary.get("available", 0)
+            currency = summary.get("currency", "GBP")
+
+            # Calculate equity (balance + unrealised P&L)
+            equity = balance + pl
+            margin_used = deposit
+
+            pl_emoji = "📈" if pl >= 0 else "📉"
+            pl_sign = "+" if pl >= 0 else ""
+
+            await update.message.reply_text(
+                f"*💰 ACCOUNT SUMMARY*\n"
+                f"─────────────────────\n"
+                f"*Balance:* £{balance:.2f}\n"
+                f"*Equity:* £{equity:.2f}\n"
+                f"*Unrealised P&L:* {pl_sign}£{pl:.2f} {pl_emoji}\n"
+                f"*Margin Used:* £{margin_used:.2f}\n"
+                f"*Available:* £{available:.2f}\n"
+                f"*Currency:* {currency}\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+        except Exception as e:
+            logger.error(f"Balance command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch account balance: {str(e)[:200]}")
+
+    async def cmd_pl_today(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show today's realised + unrealised P&L."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today_trades = self.storage.get_trades_for_date(today)
+
+            # Realised P&L from closed trades today
+            closed_trades = [t for t in today_trades if t.get("pl") is not None]
+            realised_pl = sum(t.get("pl", 0) for t in closed_trades)
+            wins = len([t for t in closed_trades if t.get("pl", 0) > 0])
+            losses = len([t for t in closed_trades if t.get("pl", 0) <= 0])
+
+            # Unrealised P&L from open positions
+            open_trades = self.broker.get_open_trades()
+            unrealised_pl = sum(float(t.get("unrealizedPL", 0)) for t in open_trades)
+
+            total_pl = realised_pl + unrealised_pl
+            total_emoji = "📈" if total_pl >= 0 else "📉"
+
+            message = (
+                f"*{total_emoji} TODAY'S P&L — {today}*\n"
+                f"═════════════════════\n"
+                f"*Realised P&L:* {'+'if realised_pl >= 0 else ''}£{realised_pl:.2f}\n"
+                f"  📊 {len(closed_trades)} closed trades ({wins}W / {losses}L)\n"
+                f"*Unrealised P&L:* {'+'if unrealised_pl >= 0 else ''}£{unrealised_pl:.2f}\n"
+                f"  📊 {len(open_trades)} open position(s)\n"
+                f"─────────────────────\n"
+                f"*Total P&L:* *{'+'if total_pl >= 0 else ''}£{total_pl:.2f}*\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            )
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"P&L today command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch today's P&L: {str(e)[:200]}")
+
+    async def cmd_pl_week(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show this week's running total P&L."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            week_trades = self.storage.get_trades_for_week()
+            closed_trades = [t for t in week_trades if t.get("pl") is not None]
+            total_pl = sum(t.get("pl", 0) for t in closed_trades)
+            wins = len([t for t in closed_trades if t.get("pl", 0) > 0])
+            losses = len([t for t in closed_trades if t.get("pl", 0) <= 0])
+            win_rate = round(wins / len(closed_trades) * 100, 1) if closed_trades else 0
+
+            # P&L by pair
+            pair_pl = {}
+            for t in closed_trades:
+                pair = (t.get("pair", "Unknown")).replace("_", "/")
+                pair_pl[pair] = pair_pl.get(pair, 0) + t.get("pl", 0)
+
+            total_emoji = "📈" if total_pl >= 0 else "📉"
+
+            message = (
+                f"*{total_emoji} THIS WEEK'S P&L*\n"
+                f"═════════════════════\n"
+                f"*Total Trades:* {len(closed_trades)}\n"
+                f"*Win Rate:* {win_rate}% ({wins}W / {losses}L)\n"
+                f"*Net P&L:* *{'+'if total_pl >= 0 else ''}£{total_pl:.2f}*\n"
+            )
+
+            if pair_pl:
+                message += f"\n*By Pair:*\n"
+                for pair, pl in sorted(pair_pl.items(), key=lambda x: x[1], reverse=True):
+                    emoji = "✅" if pl >= 0 else "❌"
+                    message += f"  {emoji} {pair}: {'+'if pl >= 0 else ''}£{pl:.2f}\n"
+
+            message += f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"P&L week command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch weekly P&L: {str(e)[:200]}")
+
+    async def cmd_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show last 10 closed trades with outcome."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH), timeout=10)
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute(
+                    "SELECT id, pair, direction, fill_price, close_price, pl, "
+                    "confidence_score, opened_at, closed_at, close_reason "
+                    "FROM trades WHERE closed_at IS NOT NULL "
+                    "ORDER BY closed_at DESC LIMIT 10"
+                ).fetchall()
+            finally:
+                conn.close()
+
+            if not rows:
+                await update.message.reply_text("📊 No closed trades yet.")
+                return
+
+            message = (
+                "*📜 TRADE HISTORY (Last 10)*\n"
+                "═════════════════════\n"
+            )
+
+            for r in rows:
+                pair = (r["pair"] or "").replace("_", "/")
+                direction = r["direction"] or "?"
+                pl = r["pl"]
+                score = r["confidence_score"]
+                closed = (r["closed_at"] or "")[:16].replace("T", " ")
+                reason = r["close_reason"] or ""
+
+                if pl is not None:
+                    emoji = "✅" if pl >= 0 else "❌"
+                    pl_str = f"{'+'if pl >= 0 else ''}£{pl:.2f}"
+                else:
+                    emoji = "❓"
+                    pl_str = "N/A"
+
+                # Short reason
+                short_reason = reason[:25] + "..." if len(reason) > 25 else reason
+
+                message += (
+                    f"{emoji} *#{r['id']}* {pair} {direction} | "
+                    f"{pl_str} | {score:.0f}%\n"
+                    f"    _{closed}_ | _{short_reason}_\n"
+                )
+
+            message += f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"History command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch trade history: {str(e)[:200]}")
+
+    # ── Bot Control Commands ──────────────────────────────────────────────────
+
+    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show bot health, last scan time, next scan time, services status."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            import bot.scheduler as scheduler
+
+            # Trading state
+            paused = scheduler._trading_paused
+            circuit_breaker = scheduler._circuit_breaker_until
+            paused_str = "⏸ *PAUSED*" if paused else "▶️ Active"
+            cb_str = ""
+            if circuit_breaker and datetime.now(timezone.utc) < circuit_breaker:
+                cb_str = f"\n🚨 *Circuit breaker active until:* {circuit_breaker.strftime('%H:%M UTC')}"
+
+            # Open positions
+            open_trades = self.broker.get_open_trades()
+            total_upl = sum(float(t.get("unrealizedPL", 0)) for t in open_trades)
+
+            # Service health
+            health = await self._check_health()
+
+            message = (
+                f"*🤖 BOT STATUS*\n"
+                f"═════════════════════\n"
+                f"*Trading:* {paused_str}{cb_str}\n"
+                f"*Open Positions:* {len(open_trades)}\n"
+                f"*Unrealised P&L:* {'+'if total_upl >= 0 else ''}£{total_upl:.2f}\n"
+                f"─────────────────────\n"
+                f"*Services:*\n"
+                f"  IG API: {health.get('ig_api', '❓')}\n"
+                f"  MCP Server: {health.get('mcp_server', '❓')}\n"
+                f"─────────────────────\n"
+                f"*Scan Interval:* Every {config.SCAN_INTERVAL_MINUTES} min\n"
+                f"*Min Confidence:* {config.MIN_CONFIDENCE_SCORE}%\n"
+                f"*Max Positions:* {config.MAX_OPEN_POSITIONS}\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            )
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Status command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch status: {str(e)[:200]}")
+
+    async def cmd_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Trigger the daily report immediately on demand."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await update.message.reply_text("📊 Generating daily report...")
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            import bot.scheduler as scheduler
+            # Run the daily report in a thread to avoid blocking
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, scheduler.send_daily_report)
+            await update.message.reply_text("✅ Daily report sent!")
+        except Exception as e:
+            logger.error(f"Report command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to generate report: {str(e)[:200]}")
+
+    # ── Strategy Commands ─────────────────────────────────────────────────────
+
+    async def cmd_set_confidence(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Adjust the confidence threshold on the fly. Usage: /setconfidence 50"""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        args = update.message.text.replace("/setconfidence", "", 1).strip()
+        if not args:
+            await update.message.reply_text(
+                f"*Current confidence threshold:* {config.MIN_CONFIDENCE_SCORE}%\n\n"
+                f"*Usage:* `/setconfidence 50` — set minimum to 50%",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        try:
+            new_value = float(args)
+            if new_value < 0 or new_value > 100:
+                await update.message.reply_text("⚠️ Confidence must be between 0 and 100.")
+                return
+
+            old_value = config.MIN_CONFIDENCE_SCORE
+            config.MIN_CONFIDENCE_SCORE = new_value
+            logger.info(f"Confidence threshold changed: {old_value}% → {new_value}% (via Telegram)")
+
+            await update.message.reply_text(
+                f"*⚙️ CONFIDENCE THRESHOLD UPDATED*\n"
+                f"─────────────────────\n"
+                f"*Previous:* {old_value}%\n"
+                f"*New:* {new_value}%\n\n"
+                f"_Change is immediate — no restart needed._\n"
+                f"_Note: resets on bot restart. Edit config.yaml for permanent change._\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+        except ValueError:
+            await update.message.reply_text("⚠️ Invalid number. Usage: `/setconfidence 50`", parse_mode=ParseMode.MARKDOWN)
+
+    async def cmd_set_risk(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Adjust the % risk per trade. Usage: /setrisk 2"""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        args = update.message.text.replace("/setrisk", "", 1).strip()
+        if not args:
+            await update.message.reply_text(
+                f"*Current risk per trade:* {config.PER_TRADE_RISK_PCT}%\n\n"
+                f"*Usage:* `/setrisk 2` — set risk to 2% per trade",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        try:
+            new_value = float(args)
+            if new_value <= 0 or new_value > 10:
+                await update.message.reply_text("⚠️ Risk must be between 0.1 and 10%.")
+                return
+
+            old_value = config.PER_TRADE_RISK_PCT
+            config.PER_TRADE_RISK_PCT = new_value
+            logger.info(f"Risk per trade changed: {old_value}% → {new_value}% (via Telegram)")
+
+            await update.message.reply_text(
+                f"*⚙️ RISK PER TRADE UPDATED*\n"
+                f"─────────────────────\n"
+                f"*Previous:* {old_value}%\n"
+                f"*New:* {new_value}%\n\n"
+                f"_Change is immediate — no restart needed._\n"
+                f"_Note: resets on bot restart. Edit config.yaml for permanent change._\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
+        except ValueError:
+            await update.message.reply_text("⚠️ Invalid number. Usage: `/setrisk 2`", parse_mode=ParseMode.MARKDOWN)
+
+    async def cmd_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show all current bot settings in one message."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        try:
+            import bot.scheduler as scheduler
+            paused = scheduler._trading_paused
+
+            shadow_mode = "On" if config.LSTM_SHADOW_MODE else "Off"
+            lstm_status = "Enabled" if config.LSTM_ENABLED else "Disabled"
+            streaming = "Enabled" if config.ENABLE_STREAMING else "Disabled"
+
+            message = (
+                f"*⚙️ BOT SETTINGS*\n"
+                f"═════════════════════\n"
+                f"*Trading:*\n"
+                f"  Status: {'⏸ Paused' if paused else '▶️ Active'}\n"
+                f"  Environment: {config.IG_ENVIRONMENT.upper()}\n"
+                f"  Max Capital: £{config.MAX_CAPITAL}\n"
+                f"  Pairs: {', '.join([p.replace('_','/') for p in config.PAIRS])}\n"
+                f"  Timeframe: {config.TIMEFRAME}\n"
+                f"  Scan Interval: {config.SCAN_INTERVAL_MINUTES} min\n"
+                f"  Max Open Positions: {config.MAX_OPEN_POSITIONS}\n"
+                f"─────────────────────\n"
+                f"*Confidence:*\n"
+                f"  Min to Trade: {config.MIN_CONFIDENCE_SCORE}%\n"
+                f"  Overnight Hold: {config.HOLD_OVERNIGHT_THRESHOLD}%\n"
+                f"─────────────────────\n"
+                f"*Risk:*\n"
+                f"  Per Trade Risk: {config.PER_TRADE_RISK_PCT}%\n"
+                f"  SL ATR Multiplier: {config.STOP_LOSS_ATR_MULTIPLIER}x\n"
+                f"  TP Ratio: {config.TAKE_PROFIT_RATIO}x\n"
+                f"  Circuit Breaker: {config.DAILY_LOSS_CIRCUIT_BREAKER_PCT}%\n"
+                f"  Correlation Block: {config.CORRELATION_BLOCK_THRESHOLD}\n"
+                f"─────────────────────\n"
+                f"*LSTM:*\n"
+                f"  Status: {lstm_status}\n"
+                f"  Shadow Mode: {shadow_mode}\n"
+                f"  Retrain Interval: {config.LSTM_RETRAIN_INTERVAL_MIN} min\n"
+                f"─────────────────────\n"
+                f"*Infrastructure:*\n"
+                f"  Streaming: {streaming}\n"
+                f"  P&L Alert Threshold: £{config.STREAMING_PL_ALERT_THRESHOLD}\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            )
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            logger.error(f"Settings command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch settings: {str(e)[:200]}")
+
+    # ── Deploy Commands ───────────────────────────────────────────────────────
+
+    async def cmd_deploy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Trigger the GitHub Actions CI/CD workflow via workflow dispatch."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        if not config.GITHUB_PAT:
+            await update.message.reply_text(
+                "⚠️ GITHUB_PAT not configured. Add it to your secrets to enable deploy."
+            )
+            return
+
+        await update.message.reply_text("🚀 Triggering deployment...")
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            # Trigger workflow dispatch via GitHub API
+            repo = config.GITHUB_REPO
+            url = f"https://api.github.com/repos/{repo}/actions/workflows/ci.yml/dispatches"
+            headers = {
+                "Authorization": f"token {config.GITHUB_PAT}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+            payload = {"ref": "main"}
+
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.post(url, json=payload, headers=headers)
+
+            if r.status_code == 204:
+                await update.message.reply_text(
+                    f"*🚀 DEPLOY TRIGGERED*\n"
+                    f"─────────────────────\n"
+                    f"*Repo:* {repo}\n"
+                    f"*Branch:* main\n"
+                    f"*Workflow:* ci.yml\n\n"
+                    f"⏳ Polling for completion (up to 10 min)...\n"
+                    f"[View on GitHub](https://github.com/{repo}/actions)\n"
+                    f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                    parse_mode=ParseMode.MARKDOWN,
+                    disable_web_page_preview=True
+                )
+
+                # Poll for completion in the background
+                asyncio.create_task(self._poll_deploy_status(update, context))
+            else:
+                await update.message.reply_text(
+                    f"⚠️ Deploy trigger failed (HTTP {r.status_code})\n"
+                    f"Response: {r.text[:300]}"
+                )
+
+        except Exception as e:
+            logger.error(f"Deploy command failed: {e}")
+            await update.message.reply_text(f"⚠️ Deploy failed: {str(e)[:200]}")
+
+    async def _poll_deploy_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Poll GitHub Actions API every 30s for up to 10 minutes to report deploy outcome."""
+        repo = config.GITHUB_REPO
+        headers = {
+            "Authorization": f"token {config.GITHUB_PAT}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+
+        # Wait a few seconds for the run to appear
+        await asyncio.sleep(5)
+
+        max_polls = 20  # 20 × 30s = 10 minutes
+        run_id = None
+
+        for i in range(max_polls):
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    # Get the most recent workflow run
+                    r = await client.get(
+                        f"https://api.github.com/repos/{repo}/actions/runs?per_page=1",
+                        headers=headers
+                    )
+                    runs = r.json().get("workflow_runs", [])
+
+                    if not runs:
+                        await asyncio.sleep(30)
+                        continue
+
+                    run = runs[0]
+                    run_id = run.get("id")
+                    status = run.get("status")
+                    conclusion = run.get("conclusion")
+
+                    if status == "completed":
+                        emoji = "✅" if conclusion == "success" else "❌"
+                        run_url = run.get("html_url", "")
+                        duration = ""
+                        if run.get("created_at") and run.get("updated_at"):
+                            try:
+                                from datetime import datetime as dt
+                                created = dt.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+                                updated = dt.fromisoformat(run["updated_at"].replace("Z", "+00:00"))
+                                secs = (updated - created).total_seconds()
+                                duration = f"\n*Duration:* {int(secs)}s"
+                            except Exception:
+                                pass
+
+                        await update.message.reply_text(
+                            f"*{emoji} DEPLOY {'COMPLETE' if conclusion == 'success' else 'FAILED'}*\n"
+                            f"─────────────────────\n"
+                            f"*Status:* {conclusion.upper()}{duration}\n"
+                            f"[View Run](https://github.com/{repo}/actions/runs/{run_id})\n"
+                            f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+                            parse_mode=ParseMode.MARKDOWN,
+                            disable_web_page_preview=True
+                        )
+                        return
+
+            except Exception as e:
+                logger.debug(f"Deploy poll error: {e}")
+
+            await asyncio.sleep(30)
+
+        # Timed out
+        await update.message.reply_text(
+            f"⏰ Deploy status polling timed out after 10 minutes.\n"
+            f"Check manually: https://github.com/{repo}/actions"
+        )
+
+    async def cmd_deploy_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show the status of the last GitHub Actions deployment."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        if not config.GITHUB_PAT:
+            await update.message.reply_text(
+                "⚠️ GITHUB_PAT not configured. Add it to your secrets."
+            )
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            repo = config.GITHUB_REPO
+            headers = {
+                "Authorization": f"token {config.GITHUB_PAT}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(
+                    f"https://api.github.com/repos/{repo}/actions/runs?per_page=5",
+                    headers=headers
+                )
+                runs = r.json().get("workflow_runs", [])
+
+            if not runs:
+                await update.message.reply_text("📊 No workflow runs found.")
+                return
+
+            message = (
+                "*🚀 RECENT DEPLOYMENTS*\n"
+                "═════════════════════\n"
+            )
+
+            for run in runs:
+                status = run.get("status", "?")
+                conclusion = run.get("conclusion", "")
+                name = run.get("name", "?")
+                created = (run.get("created_at") or "")[:16].replace("T", " ")
+
+                if status == "completed":
+                    emoji = "✅" if conclusion == "success" else "❌"
+                    result = conclusion.upper()
+                elif status == "in_progress":
+                    emoji = "⏳"
+                    result = "IN PROGRESS"
+                else:
+                    emoji = "⏸"
+                    result = status.upper()
+
+                message += f"{emoji} {name} | {result} | {created}\n"
+
+            message += (
+                f"\n[View all runs](https://github.com/{repo}/actions)\n"
+                f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            )
+
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+
+        except Exception as e:
+            logger.error(f"Deploy status command failed: {e}")
+            await update.message.reply_text(f"⚠️ Could not fetch deploy status: {str(e)[:200]}")
+
+    async def _send_safe(self, update: Update, text: str):
+        """Send a message with Markdown, falling back to plaintext if parsing fails.
+        Splits long messages to stay within Telegram's 4096 char limit."""
+        chunks = []
+        while text:
+            if len(text) <= 4000:
+                chunks.append(text)
+                break
+            split_at = text.rfind("\n", 0, 4000)
+            if split_at == -1:
+                split_at = 4000
+            chunks.append(text[:split_at])
+            text = text[split_at:]
+
+        for chunk in chunks:
+            if not chunk.strip():
+                continue
+            try:
+                await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                # Markdown parse failed — send without formatting so the message still arrives
+                logger.warning("Markdown parse failed, resending chunk without formatting")
+                await update.message.reply_text(chunk)
+
+    async def cmd_integrity(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Run a full profit integrity check and report results."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            # Use the shared integrity monitor from the scheduler so pending actions persist
+            import bot.scheduler as scheduler
+            monitor = scheduler.integrity_monitor
+            report = monitor.get_full_report()
+
+            # Send report — fall back to plaintext if Markdown parsing fails
+            await self._send_safe(update, report)
+
+        except Exception as e:
+            logger.error(f"Integrity command failed: {e}")
+            await update.message.reply_text(f"⚠️ Integrity check failed: {str(e)[:200]}")
+
+    async def cmd_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Apply an integrity recommendation. Usage: /action 1"""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        args = update.message.text.replace("/action", "", 1).strip()
+        if not args or not args.isdigit():
+            await update.message.reply_text(
+                "*Usage:* `/action <number>`\n\n"
+                "*Example:* `/action 1` — apply recommendation #1\n"
+                "Use `/integrity` to see available actions.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        action_id = int(args)
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            import bot.scheduler as scheduler
+            monitor = scheduler.integrity_monitor
+            result = monitor.apply_action(action_id)
+            await self._send_safe(update, result)
+        except Exception as e:
+            logger.error(f"Action command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to apply action: {str(e)[:200]}")
+
+    async def cmd_discuss(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get detailed explanation of a recommendation. Usage: /discuss 1"""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        args = update.message.text.replace("/discuss", "", 1).strip()
+        if not args or not args.isdigit():
+            await update.message.reply_text(
+                "*Usage:* `/discuss <number>`\n\n"
+                "*Example:* `/discuss 1` — explain recommendation #1 in detail\n"
+                "Use `/integrity` to see available actions.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        action_id = int(args)
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        try:
+            import bot.scheduler as scheduler
+            monitor = scheduler.integrity_monitor
+            description = monitor.describe_action(action_id)
+            await self._send_safe(update, description)
+        except Exception as e:
+            logger.error(f"Discuss command failed: {e}")
+            await update.message.reply_text(f"⚠️ Failed to describe action: {str(e)[:200]}")
 
     # ── Main Question Handler ─────────────────────────────────────────────────
 

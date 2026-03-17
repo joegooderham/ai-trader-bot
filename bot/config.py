@@ -56,6 +56,11 @@ TELEGRAM_BOT_SYS_TOKEN = os.getenv("TELEGRAM_BOT_SYS_TOKEN", "") or TELEGRAM_BOT
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# ── GitHub ───────────────────────────────────────────────────────────────────
+# Personal Access Token with repo + workflow scopes — used for triggering deploys
+GITHUB_PAT = os.getenv("GITHUB_PAT", "")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "joegooderham/ai-trader-bot")
+
 # ── Capital & Risk ────────────────────────────────────────────────────────────
 
 MAX_CAPITAL               = float(os.getenv("MAX_CAPITAL", 500))

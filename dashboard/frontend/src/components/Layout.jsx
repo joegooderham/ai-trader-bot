@@ -7,6 +7,7 @@ const navItems = [
   { to: '/trades', label: 'Trades' },
   { to: '/analytics', label: 'Analytics' },
   { to: '/wiki', label: 'Wiki' },
+  { to: '/backlog', label: 'Backlog' },
   { to: '/config', label: 'Config' },
 ]
 

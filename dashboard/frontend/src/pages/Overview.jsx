@@ -48,7 +48,7 @@ export default function Overview() {
         <StatCard
           label="Unrealized P&L"
           value={<PLBadge value={liveData?.total_unrealized_pl || 0} />}
-          sub={liveData?.prices_available ? 'Live prices via yfinance' : 'Prices unavailable'}
+          sub={liveData?.prices_available ? 'Live from latest candles' : 'Prices unavailable'}
         />
       </div>
 

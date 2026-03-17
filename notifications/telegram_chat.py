@@ -703,6 +703,15 @@ class TelegramChatHandler:
 
             if result:
                 pl = result.get("pl", 0)
+                # Persist close data to DB so dashboard P&L is accurate
+                try:
+                    self.storage.update_trade_field(deal_id, "pl", pl)
+                    self.storage.update_trade_field(deal_id, "closed_at", result.get("closed_at"))
+                    self.storage.update_trade_field(deal_id, "close_price", result.get("close_price", 0))
+                    self.storage.update_trade_field(deal_id, "close_reason", "manual_close")
+                    self.storage.update_trade_field(deal_id, "status", "CLOSED")
+                except Exception as e:
+                    logger.warning(f"Failed to persist manual close for {deal_id}: {e}")
                 pl_sign = "+" if pl >= 0 else ""
                 emoji = "✅" if pl >= 0 else "❌"
                 await update.message.reply_text(

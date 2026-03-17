@@ -1714,6 +1714,30 @@ class TelegramChatHandler:
             logger.error(f"Deploy status command failed: {e}")
             await update.message.reply_text(f"⚠️ Could not fetch deploy status: {str(e)[:200]}")
 
+    async def _send_safe(self, update: Update, text: str):
+        """Send a message with Markdown, falling back to plaintext if parsing fails.
+        Splits long messages to stay within Telegram's 4096 char limit."""
+        chunks = []
+        while text:
+            if len(text) <= 4000:
+                chunks.append(text)
+                break
+            split_at = text.rfind("\n", 0, 4000)
+            if split_at == -1:
+                split_at = 4000
+            chunks.append(text[:split_at])
+            text = text[split_at:]
+
+        for chunk in chunks:
+            if not chunk.strip():
+                continue
+            try:
+                await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+            except Exception:
+                # Markdown parse failed — send without formatting so the message still arrives
+                logger.warning("Markdown parse failed, resending chunk without formatting")
+                await update.message.reply_text(chunk)
+
     async def cmd_integrity(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Run a full profit integrity check and report results."""
         chat_id = str(update.effective_chat.id)
@@ -1728,12 +1752,8 @@ class TelegramChatHandler:
             monitor = scheduler.integrity_monitor
             report = monitor.get_full_report()
 
-            # Telegram has a 4096 char limit — split if needed
-            if len(report) > 4000:
-                await update.message.reply_text(report[:4000], parse_mode=ParseMode.MARKDOWN)
-                await update.message.reply_text(report[4000:], parse_mode=ParseMode.MARKDOWN)
-            else:
-                await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
+            # Send report — fall back to plaintext if Markdown parsing fails
+            await self._send_safe(update, report)
 
         except Exception as e:
             logger.error(f"Integrity command failed: {e}")
@@ -1762,7 +1782,7 @@ class TelegramChatHandler:
             import bot.scheduler as scheduler
             monitor = scheduler.integrity_monitor
             result = monitor.apply_action(action_id)
-            await update.message.reply_text(result, parse_mode=ParseMode.MARKDOWN)
+            await self._send_safe(update, result)
         except Exception as e:
             logger.error(f"Action command failed: {e}")
             await update.message.reply_text(f"⚠️ Failed to apply action: {str(e)[:200]}")
@@ -1790,7 +1810,7 @@ class TelegramChatHandler:
             import bot.scheduler as scheduler
             monitor = scheduler.integrity_monitor
             description = monitor.describe_action(action_id)
-            await update.message.reply_text(description, parse_mode=ParseMode.MARKDOWN)
+            await self._send_safe(update, description)
         except Exception as e:
             logger.error(f"Discuss command failed: {e}")
             await update.message.reply_text(f"⚠️ Failed to describe action: {str(e)[:200]}")

@@ -171,6 +171,7 @@ mcp:
   enable_correlation_analysis: true
   enable_volatility_regime: true
   enable_session_stats: true
+  enable_client_sentiment: true   # IG retail client positioning — contrarian indicator
 
   # How long to cache MCP analysis results (minutes)
   # Avoids re-fetching data on every single scan

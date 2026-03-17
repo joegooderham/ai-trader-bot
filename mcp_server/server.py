@@ -26,7 +26,7 @@ from loguru import logger
 import json
 from pathlib import Path
 
-from mcp_server import economic_calendar, sentiment, correlations, volatility, session_stats
+from mcp_server import economic_calendar, sentiment, correlations, volatility, session_stats, client_sentiment
 from bot import config
 
 app = FastAPI(title="AI Trader MCP Server", version="1.0.0")
@@ -124,6 +124,7 @@ async def get_market_context(pair: str):
         correlations.get_correlation_warning(pair),
         volatility.get_volatility_regime(pair),
         session_stats.get_session_performance(pair),
+        client_sentiment.get_client_sentiment(pair),
         return_exceptions=True  # Don't fail if one module errors
     )
 
@@ -139,6 +140,7 @@ async def get_market_context(pair: str):
         "correlation_warning": safe_result(results[2], {}),
         "volatility_regime": safe_result(results[3], "normal"),
         "session_performance": safe_result(results[4], {pair: 50}),
+        "client_sentiment": safe_result(results[5], {"contrarian_bias": "NEUTRAL", "bias_strength": 50}),
     }
 
     # Cache the result

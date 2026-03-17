@@ -338,4 +338,39 @@ def _apply_mcp_context(
         modifier -= 10
         reasoning_parts.append(f"⚠️ Correlation risk: already holding {correlation_warning} which moves similarly")
 
+    # ── IG Client Sentiment — Contrarian Indicator (BACKLOG-013) ───────────
+    # When a large majority of IG retail clients are positioned one way,
+    # the market statistically moves against them. This is one of the most
+    # reliable free signals available — IG's own research backs this up.
+    #
+    # Modifier logic:
+    #   - If our trade direction ALIGNS with the contrarian signal → boost
+    #   - If our trade OPPOSES the contrarian signal → penalty
+    #   - Only applies when positioning is extreme (>75% one-sided)
+    #   - The 75% threshold is intentionally conservative to avoid noise
+    ig_sentiment = mcp_context.get("client_sentiment", {})
+    contrarian_bias = ig_sentiment.get("contrarian_bias", "NEUTRAL")
+    bias_strength = ig_sentiment.get("bias_strength", 50)
+
+    if contrarian_bias != "NEUTRAL" and bias_strength >= 75:
+        # Strong contrarian signal — retail is heavily positioned one way
+        long_pct = ig_sentiment.get("long_percentage", 50)
+        short_pct = ig_sentiment.get("short_percentage", 50)
+        crowd_direction = "long" if long_pct > short_pct else "short"
+
+        if contrarian_bias == direction:
+            # Our trade aligns with the contrarian signal — confidence boost
+            modifier += 8
+            reasoning_parts.append(
+                f"IG sentiment: {bias_strength:.0f}% of retail clients are {crowd_direction} "
+                f"— contrarian signal supports our {direction}"
+            )
+        else:
+            # Our trade goes with the crowd — contrarian penalty
+            modifier -= 10
+            reasoning_parts.append(
+                f"⚠️ IG sentiment: {bias_strength:.0f}% of retail clients are {crowd_direction} "
+                f"— we're trading WITH the crowd, contrarian signal opposes"
+            )
+
     return modifier

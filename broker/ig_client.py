@@ -909,6 +909,56 @@ class IGClient:
         reverse = {v: k for k, v in IG_EPICS.items()}
         return reverse.get(epic, epic)
 
+    # ── Client Sentiment ─────────────────────────────────────────────────────
+
+    def get_client_sentiment(self, pair: str) -> Optional[dict]:
+        """
+        Fetch IG client sentiment for a market — % of IG retail clients long vs short.
+
+        This is a well-known contrarian indicator: when a large majority of retail
+        traders are positioned one way, the market often moves against them.
+        Academic research (e.g. FXCM's Speculative Sentiment Index studies) shows
+        retail positioning is a reliable contrarian signal, especially above 70-75%.
+
+        Returns:
+            dict with longPercentage, shortPercentage, totalPositions
+            or None on failure
+
+        IG API Docs: GET /clientsentiment?marketIds={epic}
+        """
+        epic = self._pair_to_epic(pair)
+        if not epic:
+            return None
+
+        try:
+            # IG client sentiment endpoint accepts market IDs (epics)
+            data = self._get(f"/clientsentiment?marketIds={epic}", version="1")
+            sentiments = data.get("clientSentiments", [])
+
+            if not sentiments:
+                logger.debug(f"No client sentiment data returned for {pair}")
+                return None
+
+            s = sentiments[0]
+            result = {
+                "pair": pair,
+                "long_percentage": float(s.get("longPositionPercentage", 50)),
+                "short_percentage": float(s.get("shortPositionPercentage", 50)),
+                # IG doesn't always return totalPositions — default to 0 if missing
+                "total_positions": int(s.get("totalPositions", 0)),
+            }
+
+            logger.debug(
+                f"IG sentiment for {pair}: "
+                f"{result['long_percentage']:.0f}% long / "
+                f"{result['short_percentage']:.0f}% short"
+            )
+            return result
+
+        except Exception as e:
+            logger.warning(f"get_client_sentiment({pair}) failed: {e}")
+            return None
+
     def test_connection(self) -> bool:
         """Quick connection test."""
         try:

@@ -456,9 +456,20 @@ def _on_streaming_position_update(position: dict):
     if not deal_id:
         return
 
-    # If the position was closed (status = DELETED), notify and clean up
+    # If the position was closed (status = DELETED), persist P&L and clean up
     if status == "DELETED":
         logger.info(f"Position closed via streaming: {pair} (deal {deal_id})")
+        # Persist the final P&L and close timestamp to the database
+        if deal_id:
+            try:
+                final_pl = upl or _last_reported_pl.get(deal_id, 0)
+                storage.update_trade_field(deal_id, "pl", final_pl)
+                storage.update_trade_field(deal_id, "closed_at", datetime.now(timezone.utc).isoformat())
+                storage.update_trade_field(deal_id, "status", "CLOSED")
+                storage.update_trade_field(deal_id, "close_reason", "stop_or_tp")
+                logger.info(f"Persisted close for {pair}: P&L £{final_pl:.2f}")
+            except Exception as e:
+                logger.warning(f"Failed to persist streaming close for {deal_id}: {e}")
         _last_reported_pl.pop(deal_id, None)
         return
 
@@ -597,12 +608,13 @@ def _check_partial_take_profit(trade: dict):
 
     result = broker.close_trade(deal_id, close_size, direction)
     if result:
-        # Mark this trade as having taken partial profit
+        # Mark this trade as having taken partial profit and record the P&L
         try:
+            partial_pl = result.get("pl") or result.get("profit_loss", 0)
             existing_breakdown = str(db_trade.get("breakdown", "")) if db_trade else ""
             storage.update_trade_field(
                 deal_id, "breakdown",
-                f"{existing_breakdown}|PARTIAL_TP:{close_size}@{current_price:.5f}"
+                f"{existing_breakdown}|PARTIAL_TP:{close_size}@{current_price:.5f}|PL:{partial_pl:.2f}"
             )
         except Exception as e:
             logger.debug(f"Failed to mark partial TP in DB: {e}")
@@ -723,14 +735,28 @@ def force_close_all():
 
     if close_results:
         for result in close_results:
+            deal_id = result.get("deal_id")
+            pl = result.get("pl") or result.get("profit_loss", 0)
+
+            # Persist close data to DB so dashboard P&L is accurate
+            if deal_id:
+                try:
+                    storage.update_trade_field(deal_id, "pl", pl)
+                    storage.update_trade_field(deal_id, "closed_at", result.get("closed_at"))
+                    storage.update_trade_field(deal_id, "close_price", result.get("close_price", 0))
+                    storage.update_trade_field(deal_id, "close_reason", "eod_close")
+                    storage.update_trade_field(deal_id, "status", "CLOSED")
+                except Exception as e:
+                    logger.warning(f"Failed to persist close data for {deal_id}: {e}")
+
             balance = broker.get_account_balance()
             # Look up the trade number from when this position was opened
-            trade_num = storage.get_trade_number(result.get("deal_id"))
+            trade_num = storage.get_trade_number(deal_id)
             notifier.trade_closed(
                 pair=result.get("pair", "Unknown"),
                 direction="N/A",
                 close_price=result.get("close_price", 0),
-                pl=result.get("pl") or result.get("profit_loss", 0),
+                pl=pl,
                 reason="End of day close",
                 account_balance=balance,
                 trade_number=trade_num

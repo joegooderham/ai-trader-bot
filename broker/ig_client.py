@@ -924,16 +924,18 @@ class IGClient:
             dict with longPercentage, shortPercentage, totalPositions
             or None on failure
 
-        IG API Docs: GET /clientsentiment?marketIds={epic}
+        IG API Docs: GET /clientsentiment/{marketId}
+        Note: The sentiment endpoint uses marketId (e.g. "EURUSD"), NOT the
+        epic code (e.g. "CS.D.EURUSD.MINI.IP"). For forex pairs the marketId
+        is simply the pair name without the underscore.
         """
-        epic = self._pair_to_epic(pair)
-        if not epic:
-            return None
+        # Convert pair format: "EUR_USD" → "EURUSD" (IG's marketId format)
+        market_id = pair.replace("_", "")
 
         try:
-            # IG client sentiment endpoint accepts market IDs (epics)
-            data = self._get(f"/clientsentiment?marketIds={epic}", version="1")
-            sentiments = data.get("clientSentiments", [])
+            # IG client sentiment endpoint uses marketId, not epic
+            data = self._get(f"/clientsentiment/{market_id}", version="1")
+            sentiments = data.get("clientSentiments", [data] if "marketId" in data else [])
 
             if not sentiments:
                 logger.debug(f"No client sentiment data returned for {pair}")

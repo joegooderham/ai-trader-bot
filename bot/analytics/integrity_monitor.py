@@ -391,8 +391,9 @@ class IntegrityMonitor:
         summary["actions"] = actions
         summary["status"] = "WARNING" if issues else "HEALTHY"
 
-        # Store pending actions for /action and /discuss commands
-        self.pending_actions = actions
+        # Append new actions to pending list (don't overwrite — deep review
+        # actions would be lost when the next hourly run fires)
+        self.pending_actions.extend(actions)
 
         # ALWAYS send — this is the key change
         self._send_hourly_report(summary, issues, actions)
@@ -889,7 +890,14 @@ class IntegrityMonitor:
         """
         Generate a comprehensive integrity report for the /integrity command.
         Runs all checks and returns a formatted Telegram message.
+
+        Resets pending actions and IDs so on-demand reports start from #1,
+        giving clean action numbering for /action and /discuss commands.
         """
+        # Reset so the full report starts with clean action IDs (#1, #2, ...)
+        self.pending_actions = []
+        self._next_action_id = 1
+
         hourly = self.hourly_review()
         deep = self.deep_review()
 

@@ -57,7 +57,7 @@ export default function Layout({ children }) {
     <div className="min-h-screen flex">
       {/* Mobile header bar */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-30 bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-center justify-between">
-        <h1 className="text-lg font-bold text-white">AI Trader</h1>
+        <Link to="/" className="text-lg font-bold text-white">AI Trader</Link>
         <div className="flex items-center gap-3">
           <RunningPL />
           <button

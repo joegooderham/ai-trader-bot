@@ -47,6 +47,7 @@ services:
       - TELEGRAM_BOT_SYS_TOKEN=${TELEGRAM_BOT_SYS_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - FRED_API_TOKEN=${FRED_API_TOKEN}
     volumes:
       - ./data_store:/app/data_store
     ports:

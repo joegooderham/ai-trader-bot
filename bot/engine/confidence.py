@@ -379,4 +379,74 @@ def _apply_mcp_context(
                 f"— we're trading WITH the crowd, contrarian signal opposes"
             )
 
+    # ── FRED Macro Bias — Interest Rate Differentials (BACKLOG-014) ──────────
+    # Carry trade logic: money flows towards higher-yielding currencies.
+    # A significant interest rate differential (>0.5%) gives a directional hint.
+    # Moderate influence — macro is a backdrop, not a timing signal.
+    fred = mcp_context.get("fred_macro", {})
+    fred_bias = fred.get("bias", "NEUTRAL")
+    fred_strength = fred.get("bias_strength", 0)
+
+    if fred_bias != "NEUTRAL" and fred_strength > 20:
+        rate_diff = fred.get("rate_differential", 0)
+        if fred_bias == direction:
+            modifier += 5
+            reasoning_parts.append(
+                f"FRED macro: {abs(rate_diff):.1f}% rate differential "
+                f"favours {direction} (carry trade)"
+            )
+        elif fred_bias != "NEUTRAL":
+            modifier -= 5
+            reasoning_parts.append(
+                f"FRED macro: {abs(rate_diff):.1f}% rate differential "
+                f"opposes our {direction} (against carry trade)"
+            )
+
+    # ── Myfxbook Community Sentiment (BACKLOG-015) ────────────────────────────
+    # Cross-validates IG Client Sentiment with ~100k connected retail accounts.
+    # When both IG and Myfxbook agree on extreme positioning, the contrarian
+    # signal is stronger. Applied independently but stacks with IG sentiment.
+    myfxbook = mcp_context.get("myfxbook_sentiment", {})
+    mfx_bias = myfxbook.get("contrarian_bias", "NEUTRAL")
+    mfx_strength = myfxbook.get("bias_strength", 50)
+
+    if mfx_bias != "NEUTRAL" and mfx_strength >= 70:
+        mfx_long = myfxbook.get("long_percentage", 50)
+        mfx_crowd = "long" if mfx_long > 50 else "short"
+
+        if mfx_bias == direction:
+            modifier += 5
+            reasoning_parts.append(
+                f"Myfxbook: {mfx_strength:.0f}% of community are {mfx_crowd} "
+                f"— contrarian supports our {direction}"
+            )
+        else:
+            modifier -= 5
+            reasoning_parts.append(
+                f"Myfxbook: {mfx_strength:.0f}% of community are {mfx_crowd} "
+                f"— contrarian opposes our {direction}"
+            )
+
+    # ── CFTC COT Positioning — Institutional Bias (BACKLOG-016) ───────────
+    # Weekly data showing how hedge funds and banks are positioned.
+    # Large speculator net positioning indicates institutional momentum.
+    # Reduces confidence when trading against institutional positioning.
+    cot = mcp_context.get("cot_positioning", {})
+    cot_bias = cot.get("bias", "NEUTRAL")
+    cot_strength = cot.get("bias_strength", 0)
+
+    if cot_bias != "NEUTRAL" and cot_strength > 20:
+        if cot_bias == direction:
+            modifier += 5
+            reasoning_parts.append(
+                f"COT: large speculators are net {cot_bias.lower()} "
+                f"— institutional momentum supports {direction}"
+            )
+        else:
+            modifier -= 8
+            reasoning_parts.append(
+                f"⚠️ COT: large speculators are net {cot_bias.lower()} "
+                f"— trading against institutional positioning"
+            )
+
     return modifier

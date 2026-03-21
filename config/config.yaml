@@ -212,6 +212,9 @@ mcp:
   enable_volatility_regime: true
   enable_session_stats: true
   enable_client_sentiment: true   # IG retail client positioning — contrarian indicator
+  enable_fred_macro: true         # FRED interest rate differentials — carry trade bias
+  enable_myfxbook_sentiment: true # Myfxbook community sentiment — secondary contrarian signal
+  enable_cot_positioning: true    # CFTC COT institutional positioning — directional filter
 
   # How long to cache MCP analysis results (minutes)
   # Avoids re-fetching data on every single scan

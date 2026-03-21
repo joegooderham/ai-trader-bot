@@ -214,11 +214,10 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 | ID | Title | Description |
 |----|-------|-------------|
 | BACKLOG-011 | Multi-asset trading (Phase 2) | Add support for UK Stocks, US Stocks, ETFs, Indices, Commodities and Crypto via the existing IG API. Requires: epic code library per asset class, contract sizing updates in `position_sizer.py`, market hours awareness in `scheduler.py`, and asset class config in `config.yaml`. **Prerequisite:** Forex must be consistently profitable on demo before this is started. |
-| BACKLOG-012 | Cloudflare landing page branding | Update the Cloudflare landing/default page with custom branding or a fully custom page where possible. Replace generic Cloudflare placeholder with project-appropriate branding, logo, and messaging. |
-| BACKLOG-013 | IG Client Sentiment integration | Add IG Client Sentiment API as a confidence modifier. Contrarian indicator: when >75% retail are positioned one way, bias towards the opposite. Free, already authenticated via IG API. Plug into MCP context → confidence scoring. |
-| BACKLOG-014 | FRED macro data integration | Integrate Federal Reserve (FRED) API for interest rate differentials, CPI, and other macro data. Use as directional bias filter in confidence scoring. Free API, `fredapi` Python library. |
-| BACKLOG-015 | Myfxbook sentiment integration | Add Myfxbook community sentiment (% long/short across ~100k accounts) as a secondary sentiment source. Cross-validates IG Client Sentiment for stronger contrarian signals. Free API. |
-| BACKLOG-016 | CFTC COT positioning data | Integrate weekly Commitment of Traders data for institutional positioning bias. Use as directional filter — reduce confidence on trades opposing large speculator positioning. Free, `cot_reports` Python library. |
+| ~~BACKLOG-013~~ | ~~IG Client Sentiment~~ | Done — `mcp_server/client_sentiment.py`, contrarian modifier in `confidence.py` |
+| ~~BACKLOG-014~~ | ~~FRED macro data~~ | Done — `mcp_server/fred_macro.py`, interest rate differential bias. Needs `FRED_API_TOKEN` env var. |
+| ~~BACKLOG-015~~ | ~~Myfxbook sentiment~~ | Done — `mcp_server/myfxbook_sentiment.py`, community contrarian signal. No API key needed. |
+| ~~BACKLOG-016~~ | ~~CFTC COT positioning~~ | Done — `mcp_server/cot_positioning.py`, institutional positioning bias via Nasdaq/Quandl. No API key needed. |
 
 ## Pending Actions
 

@@ -27,6 +27,7 @@ import json
 from pathlib import Path
 
 from mcp_server import economic_calendar, sentiment, correlations, volatility, session_stats, client_sentiment
+from mcp_server import fred_macro, myfxbook_sentiment, cot_positioning
 from bot import config
 
 app = FastAPI(title="AI Trader MCP Server", version="1.0.0")
@@ -125,6 +126,9 @@ async def get_market_context(pair: str):
         volatility.get_volatility_regime(pair),
         session_stats.get_session_performance(pair),
         client_sentiment.get_client_sentiment(pair),
+        fred_macro.get_macro_bias(pair),
+        myfxbook_sentiment.get_community_sentiment(pair),
+        cot_positioning.get_cot_positioning(pair),
         return_exceptions=True  # Don't fail if one module errors
     )
 
@@ -141,6 +145,9 @@ async def get_market_context(pair: str):
         "volatility_regime": safe_result(results[3], "normal"),
         "session_performance": safe_result(results[4], {pair: 50}),
         "client_sentiment": safe_result(results[5], {"contrarian_bias": "NEUTRAL", "bias_strength": 50}),
+        "fred_macro": safe_result(results[6], {"bias": "NEUTRAL", "bias_strength": 0}),
+        "myfxbook_sentiment": safe_result(results[7], {"contrarian_bias": "NEUTRAL", "bias_strength": 50}),
+        "cot_positioning": safe_result(results[8], {"bias": "NEUTRAL", "bias_strength": 0}),
     }
 
     # Cache the result

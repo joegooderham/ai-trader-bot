@@ -265,6 +265,26 @@ lstm:
   learning_rate: 0.001          # Adam optimizer learning rate (halved automatically on plateau)
   patience: 7                   # Stop if val loss doesn't improve for this many epochs
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Automated Remediation System
+#
+# The integrity monitor detects trading problems and recommends fixes via
+# Telegram inline buttons. These thresholds control when alerts fire.
+# ─────────────────────────────────────────────────────────────────────────────
+
+remediation:
+  # If weekly P&L drops below this, auto-pause trading (no approval needed)
+  # This is the only autonomous action — everything else requires your approval
+  autopause_weekly_loss_threshold: -50
+
+  # Alert when BUY or SELL win rate drops below this % over 7 days
+  # Recommends disabling that direction via inline button
+  direction_winrate_alert_threshold: 30
+
+  # Minimum consecutive losses before smart streak analysis kicks in
+  # Analyses whether losses are concentrated in one direction, pair, etc.
+  losing_streak_smart_analysis_min: 5
+
 data:
   # Number of days of historical data to fetch on first startup
   initial_history_days: 30

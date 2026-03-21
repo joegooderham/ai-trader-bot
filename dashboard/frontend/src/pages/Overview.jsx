@@ -1,6 +1,7 @@
 import { useApi } from '../hooks/useApi'
 import StatCard from '../components/StatCard'
 import PLBadge from '../components/PLBadge'
+import LivePLChart from '../components/LivePLChart'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 export default function Overview() {
@@ -85,6 +86,9 @@ export default function Overview() {
           </ResponsiveContainer>
         </div>
       )}
+
+      {/* Intraday P&L chart */}
+      <LivePLChart />
 
       {/* Open positions table */}
       {open_positions.length > 0 && (

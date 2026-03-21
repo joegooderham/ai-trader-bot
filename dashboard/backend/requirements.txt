@@ -5,3 +5,4 @@ markdown==3.7
 pyyaml==6.0.2
 loguru==0.7.2
 yfinance==0.2.40
+anthropic>=0.30.0

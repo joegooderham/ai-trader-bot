@@ -20,6 +20,7 @@ services:
       - TELEGRAM_BOT_SYS_TOKEN=${TELEGRAM_BOT_SYS_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DASHBOARD_CMD_TOKEN=${DASHBOARD_CMD_TOKEN}
     volumes:
       - ./data_store:/app/data_store
       - ./logs:/app/logs
@@ -87,6 +88,9 @@ services:
       - DB_PATH=/app/data_store/trader.db
       - CONFIG_PATH=/app/config/config.yaml
       - WIKI_REPO_URL=https://github.com/joegooderham/ai-trader-bot.wiki.git
+      - BOT_COMMAND_URL=http://forex-bot:8060
+      - DASHBOARD_CMD_TOKEN=${DASHBOARD_CMD_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - ./data_store:/app/data_store:ro
       - ./config:/app/config:ro
@@ -94,6 +98,7 @@ services:
       - "8050:8050"
     depends_on:
       - mcp-server
+      - forex-bot
     networks:
       - forex-network
 

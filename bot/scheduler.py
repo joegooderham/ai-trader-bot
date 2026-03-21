@@ -281,6 +281,11 @@ def scan_markets():
 
 def _evaluate_pair(pair: str, available_capital: float):
     """Evaluate a single currency pair and trade if conditions are right."""
+    # Remediation guard: skip pairs disabled at runtime by the integrity monitor
+    if pair in config.DISABLED_PAIRS:
+        logger.info(f"Skipping {pair} — disabled by remediation system")
+        return
+
     # BACKLOG-005: Correlation hard block — don't open a position if we already
     # hold a highly correlated pair (avoids doubling the same directional bet)
     open_trades = broker.get_open_trades()
@@ -400,6 +405,13 @@ def _evaluate_pair(pair: str, available_capital: float):
     )
 
     if not session_trade:
+        return
+
+    # Remediation guard: skip disabled directions (set by integrity monitor)
+    if result.direction in config.DISABLED_DIRECTIONS:
+        logger.info(
+            f"Skipping {pair} {result.direction} — direction disabled by remediation system"
+        )
         return
 
     size, stop_loss_price, take_profit_price = calculate_position_size(
@@ -1115,6 +1127,32 @@ def integrity_deep_review():
         logger.error(f"Integrity deep review failed: {e}")
 
 
+def weekly_strategy_review():
+    """
+    Monday 00:15 UTC — compare this week vs last week performance.
+    Flags pairs that flipped from profitable to unprofitable and
+    recommends defensive adjustments if P&L declined significantly.
+    """
+    try:
+        integrity_monitor.weekly_strategy_review()
+        logger.info("Weekly strategy review completed")
+    except Exception as e:
+        logger.error(f"Weekly strategy review failed: {e}")
+
+
+def daily_lstm_health():
+    """
+    Daily 08:00 UTC — LSTM model health check.
+    Reports training age, prediction accuracy, edge value, and
+    recommends shadow mode toggle based on performance.
+    """
+    try:
+        integrity_monitor.daily_lstm_health()
+        logger.info("Daily LSTM health check completed")
+    except Exception as e:
+        logger.error(f"Daily LSTM health check failed: {e}")
+
+
 def _get_mcp_context(pair: str) -> dict:
     """Fetch market context from the MCP server. Returns empty dict on failure."""
     try:
@@ -1134,6 +1172,15 @@ def main():
     config.validate()
     instance_manager.start()
     notifier.startup_message()
+
+    # Start the dashboard command API in a daemon thread — gives the dashboard
+    # HTTP access to bot internals (pause/resume, close trades, config changes)
+    from bot.command_api import start_command_api
+    threading.Thread(
+        target=start_command_api,
+        args=(broker, notifier, storage, integrity_monitor),
+        daemon=True
+    ).start()
 
     # BackgroundScheduler runs in a daemon thread, freeing the main thread
     # for the Telegram polling loop (which requires the main thread)
@@ -1239,6 +1286,23 @@ def main():
         integrity_deep_review,
         "interval", minutes=240,
         id="integrity_deep", name="Integrity Deep Review"
+    )
+
+    # ── Remediation System Jobs ─────────────────────────────────────────────
+    # Weekly strategy review — Monday 00:15 UTC
+    # Compares this week vs last: trade count, win rate, P&L per pair
+    scheduler.add_job(
+        weekly_strategy_review,
+        CronTrigger(day_of_week="mon", hour=0, minute=15),
+        id="weekly_strategy_review", name="Weekly Strategy Review"
+    )
+
+    # Daily LSTM health — every day at 08:00 UTC
+    # Checks model age, prediction accuracy, edge, recommends shadow mode toggle
+    scheduler.add_job(
+        daily_lstm_health,
+        CronTrigger(hour=8, minute=0),
+        id="daily_lstm_health", name="Daily LSTM Health"
     )
 
     logger.info("📅 Scheduler started with the following jobs:")

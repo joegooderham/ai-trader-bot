@@ -158,6 +158,72 @@ FAILOVER_TIMEOUT_SECONDS    = _instance_cfg.get("failover_timeout_seconds", 120)
 HEARTBEAT_INTERVAL_SECONDS  = _instance_cfg.get("heartbeat_interval_seconds", 30)
 
 
+# ── Runtime Config (mutable at runtime, no restart needed) ───────────────────
+# These sets are checked by the scheduler to skip disabled directions/pairs.
+# Managed by the integrity monitor's remediation system.
+
+DISABLED_DIRECTIONS: set = set()   # e.g. {"SELL"} blocks all SELL trades
+DISABLED_PAIRS: set = set()        # e.g. {"GBP_JPY"} removes pair at runtime
+
+# ── Remediation Thresholds ───────────────────────────────────────────────────
+
+_remediation_cfg = _cfg.get("remediation", {})
+AUTOPAUSE_WEEKLY_LOSS_THRESHOLD    = _remediation_cfg.get("autopause_weekly_loss_threshold", -50)
+DIRECTION_WINRATE_ALERT_THRESHOLD  = _remediation_cfg.get("direction_winrate_alert_threshold", 30)
+LOSING_STREAK_SMART_ANALYSIS_MIN   = _remediation_cfg.get("losing_streak_smart_analysis_min", 5)
+
+
+def apply_runtime_config(key: str, value) -> str:
+    """
+    Apply a config change at runtime (immediate effect) and persist to config.yaml.
+
+    Maps flat keys to module-level variables AND their YAML path.
+    Returns a description of what was changed.
+    """
+    import yaml
+
+    # Map of flat key → (module attribute name, yaml section, yaml param)
+    key_map = {
+        "min_to_trade":                 ("MIN_CONFIDENCE_SCORE",          "confidence", "min_to_trade"),
+        "per_trade_risk_pct":           ("PER_TRADE_RISK_PCT",            "trading",    "per_trade_risk_pct"),
+        "hold_overnight_threshold":     ("HOLD_OVERNIGHT_THRESHOLD",      "confidence", "hold_overnight_threshold"),
+        "trailing_stop_activation_atr": ("TRAILING_STOP_ACTIVATION_ATR",  "risk",       "trailing_stop_activation_atr"),
+        "trailing_stop_trail_atr":      ("TRAILING_STOP_TRAIL_ATR",       "risk",       "trailing_stop_trail_atr"),
+        "stop_loss_atr_multiplier":     ("STOP_LOSS_ATR_MULTIPLIER",      "risk",       "stop_loss_atr_multiplier"),
+        "take_profit_ratio":            ("TAKE_PROFIT_RATIO",             "risk",       "take_profit_ratio"),
+        "lstm_shadow_mode":             ("LSTM_SHADOW_MODE",              "lstm",       "shadow_mode"),
+    }
+
+    mapping = key_map.get(key)
+    if not mapping:
+        raise ValueError(f"Unknown runtime config key: {key}")
+
+    attr_name, yaml_section, yaml_param = mapping
+
+    # 1. Apply immediately to the running process
+    import bot.config as self_module
+    old_value = getattr(self_module, attr_name)
+    setattr(self_module, attr_name, value)
+    logger.info(f"Runtime config: {attr_name} changed {old_value} → {value}")
+
+    # 2. Persist to config.yaml so restarts keep the change
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            cfg = yaml.safe_load(f)
+
+        if yaml_section in cfg:
+            cfg[yaml_section][yaml_param] = value
+            with open(CONFIG_PATH, "w") as f:
+                yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+            logger.info(f"Config persisted: {yaml_section}.{yaml_param} = {value}")
+        else:
+            logger.warning(f"YAML section '{yaml_section}' not found — runtime change only")
+    except Exception as e:
+        logger.error(f"Failed to persist config change to YAML: {e}")
+
+    return f"{attr_name}: {old_value} → {value}"
+
+
 def validate():
     """
     Check all required environment variables are set.

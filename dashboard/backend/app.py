@@ -51,6 +51,13 @@ WIKI_PULL_INTERVAL = int(os.getenv("WIKI_PULL_INTERVAL", "1800"))  # 30 min
 # Path to built React frontend static files
 STATIC_DIR = Path(os.getenv("STATIC_DIR", "/app/frontend/dist"))
 
+# Bot command API — internal URL for sending trade commands to the bot process
+BOT_COMMAND_URL = os.getenv("BOT_COMMAND_URL", "http://forex-bot:8060")
+DASHBOARD_CMD_TOKEN = os.getenv("DASHBOARD_CMD_TOKEN", "")
+
+# Anthropic API key for AI chat
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
 # ── App Setup ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -67,7 +74,7 @@ app.add_middleware(
         "http://localhost:5173",  # Vite dev server
         "http://localhost:3000",
     ],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -120,6 +127,32 @@ async def mcp_get(endpoint: str) -> dict:
     except Exception as e:
         logger.warning(f"MCP request failed ({endpoint}): {e}")
         return {"error": str(e)}
+
+
+# ── Bot Command Proxy Helper ─────────────────────────────────────────────────
+
+
+async def bot_cmd(endpoint: str, method: str = "POST", body: dict = None) -> dict:
+    """Send a command to the trading bot's command API.
+    Returns the JSON response or raises HTTPException on failure."""
+    headers = {}
+    if DASHBOARD_CMD_TOKEN:
+        headers["Authorization"] = f"Bearer {DASHBOARD_CMD_TOKEN}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            if method == "GET":
+                resp = await client.get(f"{BOT_COMMAND_URL}{endpoint}", headers=headers)
+            else:
+                resp = await client.post(f"{BOT_COMMAND_URL}{endpoint}", json=body, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail="Bot command API unreachable")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        logger.warning(f"Bot command failed ({endpoint}): {e}")
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 # ── Wiki Management ─────────────────────────────────────────────────────────
@@ -774,6 +807,361 @@ async def health_check():
     status["database"] = "ok" if db_available() else "unreachable"
 
     return status
+
+
+# ── API Routes: Bot Commands (proxied to forex-bot:8060) ─────────────────────
+# These endpoints let the dashboard control the trading bot in real-time.
+# All POST requests are proxied to the bot's internal command API.
+
+@app.get("/api/cmd/status")
+async def cmd_status():
+    """Bot status: paused, disabled directions/pairs, config values."""
+    return await bot_cmd("/cmd/status", method="GET")
+
+@app.get("/api/cmd/balance")
+async def cmd_balance():
+    """Account balance from IG broker."""
+    return await bot_cmd("/cmd/balance", method="GET")
+
+@app.get("/api/cmd/remediation")
+async def cmd_remediation_list():
+    """List pending remediation recommendations."""
+    return await bot_cmd("/cmd/remediation", method="GET")
+
+@app.post("/api/cmd/pause")
+async def cmd_pause():
+    return await bot_cmd("/cmd/pause")
+
+@app.post("/api/cmd/resume")
+async def cmd_resume():
+    return await bot_cmd("/cmd/resume")
+
+@app.post("/api/cmd/close-all")
+async def cmd_close_all():
+    return await bot_cmd("/cmd/close-all")
+
+@app.post("/api/cmd/close-pair")
+async def cmd_close_pair(body: dict):
+    return await bot_cmd("/cmd/close-pair", body=body)
+
+@app.post("/api/cmd/close-profitable")
+async def cmd_close_profitable():
+    return await bot_cmd("/cmd/close-profitable")
+
+@app.post("/api/cmd/close-losing")
+async def cmd_close_losing():
+    return await bot_cmd("/cmd/close-losing")
+
+@app.post("/api/cmd/close/{deal_id}")
+async def cmd_close_single(deal_id: str):
+    return await bot_cmd(f"/cmd/close/{deal_id}")
+
+@app.post("/api/cmd/config")
+async def cmd_config(body: dict):
+    return await bot_cmd("/cmd/config", body=body)
+
+@app.post("/api/cmd/remediation/{action_id}/approve")
+async def cmd_remediation_approve(action_id: int):
+    return await bot_cmd(f"/cmd/remediation/{action_id}/approve")
+
+@app.post("/api/cmd/remediation/{action_id}/reject")
+async def cmd_remediation_reject(action_id: int):
+    return await bot_cmd(f"/cmd/remediation/{action_id}/reject")
+
+@app.post("/api/cmd/enable-direction")
+async def cmd_enable_direction(body: dict):
+    return await bot_cmd("/cmd/enable-direction", body=body)
+
+@app.post("/api/cmd/enable-pair")
+async def cmd_enable_pair(body: dict):
+    return await bot_cmd("/cmd/enable-pair", body=body)
+
+
+# ── API Routes: AI Chat ─────────────────────────────────────────────────────
+# Messenger-style chat with Claude. Each message gets live trading context
+# injected so Claude can answer questions about positions, P&L, strategy.
+
+import uuid
+
+_chat_sessions: dict = {}  # session_id -> list of messages
+_MAX_CHAT_HISTORY = 20
+
+
+@app.post("/api/chat")
+async def chat(body: dict):
+    """Send a message to Claude with live trading context."""
+    message = body.get("message", "").strip()
+    session_id = body.get("session_id") or str(uuid.uuid4())
+
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    # Gather live context from all data sources
+    context_parts = []
+
+    # Today's trades from DB
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with get_db() as db:
+            trades = db.execute(
+                "SELECT pair, direction, pl, confidence_score, close_reason, opened_at, closed_at "
+                "FROM trades WHERE opened_at LIKE ? ORDER BY opened_at DESC LIMIT 20",
+                (f"{today}%",)
+            ).fetchall()
+            closed = [dict(t) for t in trades if t["closed_at"]]
+            open_t = [dict(t) for t in trades if not t["closed_at"]]
+            if closed:
+                total_pl = sum(t["pl"] or 0 for t in closed)
+                wins = sum(1 for t in closed if (t["pl"] or 0) > 0)
+                context_parts.append(
+                    f"TODAY'S CLOSED TRADES: {len(closed)} trades, {wins} wins, "
+                    f"Net P&L: £{total_pl:.2f}"
+                )
+                for t in closed[:5]:
+                    context_parts.append(
+                        f"  {t['pair']} {t['direction']} → £{t['pl']:.2f} ({t['close_reason']})"
+                    )
+            if open_t:
+                context_parts.append(f"OPEN POSITIONS: {len(open_t)}")
+                for t in open_t:
+                    context_parts.append(
+                        f"  {t['pair']} {t['direction']} @ {t['confidence_score']:.0f}% confidence"
+                    )
+    except Exception as e:
+        context_parts.append(f"(Could not fetch trades: {e})")
+
+    # Bot status from command API
+    try:
+        status = await bot_cmd("/cmd/status", method="GET")
+        paused = "PAUSED" if status.get("paused") else "ACTIVE"
+        context_parts.append(f"BOT STATUS: {paused}")
+        if status.get("disabled_directions"):
+            context_parts.append(f"DISABLED DIRECTIONS: {', '.join(status['disabled_directions'])}")
+        if status.get("disabled_pairs"):
+            context_parts.append(f"DISABLED PAIRS: {', '.join(status['disabled_pairs'])}")
+        context_parts.append(f"MIN CONFIDENCE: {status.get('min_confidence', '?')}%")
+    except Exception:
+        context_parts.append("(Bot status unavailable)")
+
+    # LSTM model info from MCP
+    try:
+        model = await mcp_get("/analytics/model")
+        if model and "error" not in model:
+            current = model.get("current_model", {})
+            if current:
+                acc = (current.get("val_accuracy") or 0) * 100
+                context_parts.append(
+                    f"LSTM MODEL: accuracy {acc:.0f}%, "
+                    f"last trained {(current.get('timestamp') or '?')[:16]}"
+                )
+    except Exception:
+        pass
+
+    # Build system prompt
+    context_text = "\n".join(context_parts) if context_parts else "No live data available."
+    system_prompt = (
+        "You are an AI trading assistant for Joseph's forex day trading bot. "
+        "You have access to live trading data shown below. Answer questions about "
+        "trading performance, strategy, positions, and market conditions. "
+        "Be concise, data-driven, and use the live context to give specific answers. "
+        "Format numbers clearly (£ for GBP amounts). Keep responses under 300 words.\n\n"
+        f"LIVE TRADING CONTEXT:\n{context_text}"
+    )
+
+    # Get or create conversation history
+    if session_id not in _chat_sessions:
+        _chat_sessions[session_id] = []
+    history = _chat_sessions[session_id]
+
+    # Add user message
+    history.append({"role": "user", "content": message})
+
+    # Trim history to max length
+    if len(history) > _MAX_CHAT_HISTORY:
+        history = history[-_MAX_CHAT_HISTORY:]
+        _chat_sessions[session_id] = history
+
+    # Call Claude
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system=system_prompt,
+            messages=history,
+        )
+        reply = response.content[0].text
+
+        # Add assistant reply to history
+        history.append({"role": "assistant", "content": reply})
+
+        return {"reply": reply, "session_id": session_id}
+
+    except Exception as e:
+        logger.error(f"Chat API failed: {e}")
+        raise HTTPException(status_code=502, detail=f"AI chat failed: {str(e)[:200]}")
+
+
+# ── API Routes: Enhanced Analytics ───────────────────────────────────────────
+
+@app.get("/api/analytics/heatmap")
+async def analytics_heatmap():
+    """Pair x Hour performance heatmap — win rate and P&L by pair and hour of day."""
+    try:
+        with get_db() as db:
+            rows = db.execute("""
+                SELECT pair,
+                       CAST(strftime('%H', opened_at) AS INTEGER) as hour,
+                       COUNT(*) as trades,
+                       SUM(CASE WHEN pl > 0.01 THEN 1 ELSE 0 END) as wins,
+                       SUM(pl) as net_pl
+                FROM trades
+                WHERE closed_at IS NOT NULL AND opened_at IS NOT NULL
+                GROUP BY pair, hour
+                ORDER BY pair, hour
+            """).fetchall()
+
+        heatmap = {}
+        for r in rows:
+            pair = r["pair"]
+            hour = r["hour"]
+            if pair not in heatmap:
+                heatmap[pair] = {}
+            heatmap[pair][str(hour)] = {
+                "trades": r["trades"],
+                "wins": r["wins"],
+                "win_rate": round(r["wins"] / r["trades"] * 100, 1) if r["trades"] > 0 else 0,
+                "net_pl": round(r["net_pl"] or 0, 2),
+            }
+        return heatmap
+    except Exception as e:
+        logger.error(f"Heatmap query failed: {e}")
+        return {}
+
+
+@app.get("/api/analytics/sessions")
+async def analytics_sessions():
+    """Performance by forex trading session (Sydney, Tokyo, London, New York)."""
+    # Session definitions (UTC hours)
+    sessions = {
+        "Sydney":   (22, 7),   # 22:00 - 07:00 UTC
+        "Tokyo":    (0, 9),    # 00:00 - 09:00 UTC
+        "London":   (8, 17),   # 08:00 - 17:00 UTC
+        "New York": (13, 22),  # 13:00 - 22:00 UTC
+    }
+
+    try:
+        with get_db() as db:
+            rows = db.execute("""
+                SELECT pair, direction,
+                       CAST(strftime('%H', opened_at) AS INTEGER) as hour,
+                       pl, confidence_score
+                FROM trades
+                WHERE closed_at IS NOT NULL AND opened_at IS NOT NULL
+            """).fetchall()
+
+        def in_session(hour, start, end):
+            if start < end:
+                return start <= hour < end
+            else:  # Wraps midnight (e.g., Sydney 22-7)
+                return hour >= start or hour < end
+
+        result = {}
+        for session_name, (start, end) in sessions.items():
+            session_trades = [dict(r) for r in rows if in_session(r["hour"], start, end)]
+            # Per-pair breakdown
+            pair_stats = {}
+            for t in session_trades:
+                pair = t["pair"]
+                if pair not in pair_stats:
+                    pair_stats[pair] = {"trades": 0, "wins": 0, "pl": 0}
+                pair_stats[pair]["trades"] += 1
+                if (t["pl"] or 0) > 0.01:
+                    pair_stats[pair]["wins"] += 1
+                pair_stats[pair]["pl"] += t["pl"] or 0
+
+            for stats in pair_stats.values():
+                stats["win_rate"] = round(stats["wins"] / stats["trades"] * 100, 1) if stats["trades"] > 0 else 0
+                stats["pl"] = round(stats["pl"], 2)
+
+            total_trades = len(session_trades)
+            total_wins = sum(1 for t in session_trades if (t["pl"] or 0) > 0.01)
+            total_pl = sum(t["pl"] or 0 for t in session_trades)
+
+            result[session_name] = {
+                "trades": total_trades,
+                "wins": total_wins,
+                "win_rate": round(total_wins / total_trades * 100, 1) if total_trades > 0 else 0,
+                "pl": round(total_pl, 2),
+                "pairs": pair_stats,
+            }
+
+        return result
+    except Exception as e:
+        logger.error(f"Sessions query failed: {e}")
+        return {}
+
+
+@app.get("/api/trades/{trade_id}/detail")
+async def trade_detail(trade_id: int):
+    """Full trade detail for the trade journal — reasoning, breakdown, context."""
+    try:
+        with get_db() as db:
+            row = db.execute(
+                "SELECT * FROM trades WHERE id = ?", (trade_id,)
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Trade not found")
+
+            trade = dict(row)
+            # Parse the breakdown JSON if stored
+            if trade.get("breakdown"):
+                try:
+                    import json
+                    trade["breakdown"] = json.loads(trade["breakdown"])
+                except Exception:
+                    pass
+            return trade
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Trade detail query failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/charts/pl-intraday")
+async def pl_intraday():
+    """Hourly P&L data points for today — used by the live intraday chart."""
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with get_db() as db:
+            rows = db.execute("""
+                SELECT CAST(strftime('%H', closed_at) AS INTEGER) as hour,
+                       SUM(pl) as hourly_pl,
+                       COUNT(*) as trades
+                FROM trades
+                WHERE closed_at LIKE ? AND pl IS NOT NULL
+                GROUP BY hour
+                ORDER BY hour
+            """, (f"{today}%",)).fetchall()
+
+        data = []
+        cumulative = 0
+        for r in rows:
+            cumulative += r["hourly_pl"] or 0
+            data.append({
+                "hour": r["hour"],
+                "hourly_pl": round(r["hourly_pl"] or 0, 2),
+                "cumulative_pl": round(cumulative, 2),
+                "trades": r["trades"],
+            })
+        return data
+    except Exception as e:
+        logger.error(f"Intraday P&L query failed: {e}")
+        return []
 
 
 # ── Serve React Frontend ────────────────────────────────────────────────────

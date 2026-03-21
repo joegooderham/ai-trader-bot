@@ -158,8 +158,10 @@ class EODManager:
                 ml_prediction=ml_prediction
             )
 
-            # Apply overnight penalty — must be very strong to hold
-            overnight_penalty = 10  # Subtract 10 points for overnight risk
+            # Overnight penalty removed — let trades run if confidence holds up.
+            # Previously subtracted 10 points, which combined with the 98% threshold
+            # meant nothing ever qualified. Now threshold is 65% with no penalty.
+            overnight_penalty = 0
             final_score = max(0, result.score - overnight_penalty)
 
             # Direction must match our open position

@@ -16,6 +16,7 @@ Usage in the confidence pipeline:
 import numpy as np
 import torch
 import joblib
+from datetime import datetime
 from pathlib import Path
 from loguru import logger
 from typing import Optional
@@ -46,6 +47,7 @@ class LSTMPredictor:
         self.model = None
         self.scaler = None
         self._loaded = False
+        self.model_version = None  # Track which model file is loaded
         self._load_model()
 
     def _load_model(self):
@@ -80,8 +82,10 @@ class LSTMPredictor:
 
             self.scaler = joblib.load(str(SCALER_PATH))
             self._loaded = True
+            # Track model version from file modification time for prediction logging
+            self.model_version = f"lstm_{datetime.fromtimestamp(MODEL_PATH.stat().st_mtime).strftime('%Y%m%d_%H%M%S')}"
 
-            logger.info(f"LSTM model loaded from {MODEL_PATH}")
+            logger.info(f"LSTM model loaded from {MODEL_PATH} (version: {self.model_version})")
         except Exception as e:
             logger.error(f"Failed to load LSTM model: {e}")
             self.model = None

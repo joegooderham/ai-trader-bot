@@ -127,6 +127,7 @@ def _init_db():
                 was_correct INTEGER,
                 trade_id TEXT,
                 model_version TEXT,
+                confidence_breakdown TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
@@ -182,8 +183,21 @@ def _init_db():
             );
         """)
         conn.commit()
+
+        # Schema migrations — add columns that may not exist in older databases
+        _migrate_add_column(conn, "predictions", "confidence_breakdown", "TEXT")
+
+        conn.commit()
     finally:
         conn.close()
+
+
+def _migrate_add_column(conn, table: str, column: str, col_type: str):
+    """Add a column to a table if it doesn't already exist (safe migration)."""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+    except Exception:
+        pass  # Column already exists
 
 
 # Initialise database on module load
@@ -537,11 +551,18 @@ class TradeStorage:
         """
         conn = _get_connection()
         try:
+            # Store confidence breakdown as JSON string if provided
+            breakdown = prediction.get("confidence_breakdown")
+            if isinstance(breakdown, dict):
+                import json as _json
+                breakdown = _json.dumps(breakdown)
+
             cursor = conn.execute("""
                 INSERT INTO predictions
                 (pair, timestamp, predicted_direction, predicted_probability,
-                 confidence_score, indicator_only_score, trade_id, model_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 confidence_score, indicator_only_score, trade_id, model_version,
+                 confidence_breakdown)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 prediction.get("pair"),
                 prediction.get("timestamp"),
@@ -551,6 +572,7 @@ class TradeStorage:
                 prediction.get("indicator_only_score"),
                 prediction.get("trade_id"),
                 prediction.get("model_version"),
+                breakdown,
             ))
             conn.commit()
             return cursor.lastrowid

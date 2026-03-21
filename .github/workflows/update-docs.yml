@@ -28,11 +28,9 @@ jobs:
 
       - name: Check for code changes (skip if only .md files changed)
         id: check
-        shell: bash
+        shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
           $changed = git diff --name-only HEAD~1 HEAD 2>$null
-          $LASTEXITCODE = 0
           $codeChanged = $changed | Where-Object { $_ -notmatch '\.md$' }
           if (-not $codeChanged) {
             "skip=true" >> $env:GITHUB_OUTPUT
@@ -45,11 +43,9 @@ jobs:
       - name: Skip if last commit was from docs-bot
         id: check_bot
         if: steps.check.outputs.skip != 'true'
-        shell: bash
+        shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
           $lastMsg = git log -1 --pretty=%s
-          $LASTEXITCODE = 0
           if ($lastMsg -match '\[docs-bot\]') {
             "skip=true" >> $env:GITHUB_OUTPUT
             Write-Host "Last commit was from docs-bot — skipping to avoid loop"
@@ -59,21 +55,21 @@ jobs:
 
       - name: Install dependencies
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
+        shell: pwsh
         run: pip install anthropic
 
       - name: Run documentation updater
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
+        shell: pwsh
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m scripts.update_docs
 
       - name: Commit and push README/CLAUDE.md changes
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
-        shell: bash
+        shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
           $diff = git diff --name-only -- '*.md'
-          $LASTEXITCODE = 0
           if (-not $diff) {
             Write-Host "No documentation changes to commit"
             exit 0

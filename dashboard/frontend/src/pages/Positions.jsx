@@ -1,9 +1,40 @@
 import { useApi } from '../hooks/useApi'
+import { useCommand } from '../hooks/useCommand'
 import PLBadge from '../components/PLBadge'
+import TradeControls from '../components/TradeControls'
+import { useToast } from '../components/Toast'
 
 export default function Positions() {
   // Refresh every 15 seconds for near-real-time position updates
   const { data, loading, error } = useApi('/api/positions/live', 15000)
+  const { execute, loading: cmdLoading } = useCommand()
+  const { showToast, ToastComponent } = useToast()
+
+  function handleControlAction(action, result, isError) {
+    if (isError) {
+      showToast(`${action} failed`, 'error')
+    } else if (result) {
+      showToast(result.message || `${action} completed`)
+    }
+  }
+
+  async function handleClose(dealId, pair) {
+    try {
+      const result = await execute(`close/${dealId}`)
+      showToast(`${pair.replace('_', '/')} closed: £${result.pl?.toFixed(2)}`)
+    } catch (err) {
+      showToast(`Failed to close: ${err.message}`, 'error')
+    }
+  }
+
+  async function handleClosePair(pair) {
+    try {
+      const result = await execute('close-pair', { pair })
+      showToast(`${pair.replace('_', '/')} — ${result.closed} position(s) closed`)
+    } catch (err) {
+      showToast(`Failed: ${err.message}`, 'error')
+    }
+  }
 
   if (loading) return <p className="text-gray-400">Loading positions...</p>
   if (error) return <p className="text-red-400">Error: {error}</p>
@@ -11,8 +42,20 @@ export default function Positions() {
   const positions = data?.positions || []
   const totalUpl = data?.total_unrealized_pl
 
+  // Group by pair for close-pair buttons
+  const pairGroups = {}
+  positions.forEach(p => {
+    const pair = p.pair || 'Unknown'
+    if (!pairGroups[pair]) pairGroups[pair] = []
+    pairGroups[pair].push(p)
+  })
+
   return (
     <div>
+      {ToastComponent}
+
+      <TradeControls onAction={handleControlAction} />
+
       <div className="flex items-center justify-between mb-4 md:mb-6">
         <div>
           <h2 className="text-xl md:text-2xl font-bold">Open Positions</h2>
@@ -34,7 +77,14 @@ export default function Positions() {
       ) : (
         <div className="grid gap-4">
           {positions.map((pos, i) => (
-            <PositionCard key={i} position={pos} />
+            <PositionCard
+              key={i}
+              position={pos}
+              onClose={handleClose}
+              onClosePair={handleClosePair}
+              cmdLoading={cmdLoading}
+              showPairClose={pairGroups[pos.pair]?.length > 1}
+            />
           ))}
         </div>
       )}
@@ -42,7 +92,7 @@ export default function Positions() {
   )
 }
 
-function PositionCard({ position }) {
+function PositionCard({ position, onClose, onClosePair, cmdLoading, showPairClose }) {
   const isBuy = position.direction === 'BUY'
   const isJpy = position.pair?.includes('JPY')
 
@@ -64,9 +114,24 @@ function PositionCard({ position }) {
             {position.direction}
           </span>
         </div>
-        <span className="text-xs text-gray-500">
-          {position.status}
-        </span>
+        <div className="flex items-center gap-2">
+          {showPairClose && (
+            <button
+              onClick={() => onClosePair(position.pair)}
+              disabled={cmdLoading}
+              className="px-2 py-1 text-xs text-orange-400 bg-orange-600/10 hover:bg-orange-600/20 border border-orange-600/20 rounded transition-colors"
+            >
+              Close Pair
+            </button>
+          )}
+          <button
+            onClick={() => onClose(position.deal_id, position.pair)}
+            disabled={cmdLoading}
+            className="px-2 py-1 text-xs text-red-400 bg-red-600/10 hover:bg-red-600/20 border border-red-600/20 rounded transition-colors"
+          >
+            Close
+          </button>
+        </div>
       </div>
 
       {/* Price details grid */}

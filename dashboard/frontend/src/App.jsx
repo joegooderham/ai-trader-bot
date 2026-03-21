@@ -9,6 +9,12 @@ import Wiki from './pages/Wiki'
 import WikiPage from './pages/WikiPage'
 import Config from './pages/Config'
 import Backlog from './pages/Backlog'
+import ConfigEditor from './pages/ConfigEditor'
+import Remediation from './pages/Remediation'
+import Chat from './pages/Chat'
+import TradeJournal from './pages/TradeJournal'
+import Heatmap from './pages/Heatmap'
+import SessionAnalysis from './pages/SessionAnalysis'
 
 export default function App() {
   return (
@@ -17,12 +23,18 @@ export default function App() {
         <Route path="/" element={<Overview />} />
         <Route path="/positions" element={<Positions />} />
         <Route path="/trades" element={<TradeHistory />} />
+        <Route path="/journal" element={<TradeJournal />} />
         <Route path="/summary" element={<Summary />} />
         <Route path="/analytics" element={<Analytics />} />
+        <Route path="/heatmap" element={<Heatmap />} />
+        <Route path="/sessions" element={<SessionAnalysis />} />
+        <Route path="/chat" element={<Chat />} />
+        <Route path="/remediation" element={<Remediation />} />
+        <Route path="/config" element={<ConfigEditor />} />
+        <Route path="/config-readonly" element={<Config />} />
         <Route path="/wiki" element={<Wiki />} />
         <Route path="/wiki/:pageName" element={<WikiPage />} />
         <Route path="/backlog" element={<Backlog />} />
-        <Route path="/config" element={<Config />} />
       </Routes>
     </Layout>
   )

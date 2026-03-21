@@ -10,6 +10,10 @@ FastAPI service providing market context and analytics APIs. Runs as its own Doc
 | `correlations.py` | Provides correlation warnings when the bot considers opening correlated positions. |
 | `volatility.py` | Determines the current volatility regime (low/normal/high) for position sizing adjustments. |
 | `session_stats.py` | Historical performance stats by trading session (London, New York, Tokyo, Sydney). |
+| `client_sentiment.py` | IG Client Sentiment — retail positioning contrarian indicator. Already authenticated via IG API. |
+| `fred_macro.py` | FRED macro data — interest rate differentials for carry trade bias. Requires `FRED_API_TOKEN` env var. 6-hour cache. |
+| `myfxbook_sentiment.py` | Myfxbook community sentiment — ~100k connected accounts, cross-validates IG sentiment. No API key needed. 30-min cache. |
+| `cot_positioning.py` | CFTC COT data — weekly institutional positioning (hedge funds, banks) via Nasdaq/Quandl. No API key needed. 24-hour cache. |
 
 ## Analytics Endpoints
 | Endpoint | Purpose |

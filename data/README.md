@@ -4,7 +4,7 @@ Data storage, context generation, and runtime data files.
 
 | File | Purpose |
 |------|---------|
-| `storage.py` | SQLite database interface. Tables: `trades`, `overnight_holds`, `candles`, `predictions`, `model_metrics`, `analytics_snapshots`. Handles JSON migration from legacy flat files. |
+| `storage.py` | SQLite database interface. Tables: `trades`, `overnight_holds`, `candles`, `predictions`, `model_metrics`, `analytics_snapshots`. Provides `get_trades_for_date()`, `get_trades_for_week()`, `get_trades_for_date_range()` for historical queries. |
 | `context_writer.py` | Generates `LIVE_CONTEXT.md` every 15 minutes — account status, today's trades, weekly performance, all-time stats, config. This file is read by the Claude Projects integration for deep analysis. |
 
 ## Runtime Files (not committed)

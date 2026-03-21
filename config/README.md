@@ -8,8 +8,9 @@ Trading configuration files.
 
 ## Key Sections
 - **trading** — pairs, scan interval, max positions, streaming, session adjustments, multi-timeframe
-- **confidence** — aggressiveness (min score to trade), component weights
-- **risk** — stop-loss/take-profit ATR multipliers, trailing stops, correlation block, circuit breaker
+- **confidence** — aggressiveness (min score to trade: currently 85%), component weights
+- **risk** — stop-loss/take-profit ATR multipliers, trailing stops, correlation block, circuit breaker, confidence-tiered risk, partial profit-taking
 - **lstm** — architecture (hidden_size, num_layers, dropout), training hyperparameters, shadow mode, retrain interval
 - **schedule** — EOD times, report times
-- **mcp** — which analysis modules to enable, cache duration, Claude model
+- **mcp** — 9 analysis modules: economic calendar, news sentiment, correlations, volatility, session stats, IG client sentiment, FRED macro, Myfxbook sentiment, CFTC COT positioning
+- **remediation** — auto-pause threshold (-£50 weekly), direction win rate alert threshold (30%), losing streak analysis minimum (5)

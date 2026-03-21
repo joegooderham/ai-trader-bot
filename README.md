@@ -6,11 +6,13 @@ An AI-powered Forex day trading bot that runs 24/7, makes intelligent trade deci
 
 ## What This Bot Does
 
-- **Trades automatically** — scans 5 currency pairs every 15 minutes for opportunities
-- **Uses real AI reasoning** — not just pattern matching. Claude AI analyses market context and explains *why* each trade was made
+- **Trades automatically** — scans 10 currency pairs every 5 minutes for high-confidence opportunities (85% threshold)
+- **9 data sources per decision** — LSTM neural network, technical indicators, IG client sentiment, Myfxbook community sentiment, CFTC institutional positioning, FRED macro rates, economic calendar, volatility regime, session performance
+- **Self-healing** — automated remediation system detects problems (losing streaks, direction failures), recommends fixes, and lets you approve via Telegram inline buttons or the web dashboard
+- **Interactive dashboard** — real-time positions, AI chat, trade journal, heatmap, session analysis, config editor, remediation panel (Cloudflare Access protected)
 - **Stays within your budget** — never puts more than your set capital at risk
-- **Closes daily** — all positions closed at 23:59 UTC unless the 98% confidence rule is met
-- **Keeps you informed** — Telegram alerts for every trade, plus daily and weekly reports
+- **Closes daily** — all positions closed at 23:59 UTC unless the overnight hold threshold (65%) is met
+- **Keeps you informed** — Telegram alerts for every trade, plus daily/weekly reports and integrity scans
 
 ---
 

@@ -4,8 +4,8 @@ All Telegram communication — outbound messages and inbound commands.
 
 | File | Purpose |
 |------|---------|
-| `telegram_bot.py` | **Outbound messages.** Sends trade notifications (opened/closed), daily and weekly reports, overnight hold alerts, health alerts, fallback alerts, dev activity updates, startup message. Uses a fresh Bot instance per send with 1s rate limiting to avoid pool exhaustion. |
-| `telegram_chat.py` | **Inbound commands + AI chat.** Handles all `/commands` and free-text questions. Free-text questions are sent to Claude AI with full trade context for intelligent answers. |
+| `telegram_bot.py` | **Outbound messages.** Sends trade notifications (opened/closed), daily and weekly reports, overnight hold alerts, health alerts, fallback alerts, dev activity updates, startup message. Supports inline keyboard buttons (`send_action_buttons`) for remediation approve/reject. Uses a fresh Bot instance per send with 1s rate limiting. |
+| `telegram_chat.py` | **Inbound commands + AI chat + inline button callbacks.** Handles all `/commands`, free-text questions (sent to Claude AI with context), and `CallbackQueryHandler` for remediation inline button presses (approve/reject actions from integrity monitor). |
 
 ## Available Commands
 
@@ -49,13 +49,16 @@ All Telegram communication — outbound messages and inbound commands.
 | `/deploy` | Trigger CI/CD deployment via GitHub Actions |
 | `/deploystatus` | Show last 5 deployment runs |
 
-### Analytics
+### Analytics & Integrity
 | Command | Action |
 |---------|--------|
 | `/accuracy` | LSTM prediction accuracy (7d) |
 | `/model` | LSTM model info and last retrain |
 | `/drift` | Model drift detection status |
 | `/performance` | LSTM performance metrics |
+| `/integrity` | Full profit integrity check with recommendations |
+| `/action <#>` | Apply an integrity recommendation |
+| `/discuss <#>` | Discuss a recommendation in detail |
 
 ### Tools
 | Command | Action |

@@ -25,7 +25,7 @@ const navGroups = [
     label: 'Tools',
     items: [
       { to: '/chat', label: 'AI Chat' },
-      { to: '/what-if', label: 'What-If Simulator' },
+      { to: '/what-if', label: 'Mystic-Wolf' },
       { to: '/remediation', label: 'Remediation', badge: true },
       { to: '/config', label: 'Config' },
     ],

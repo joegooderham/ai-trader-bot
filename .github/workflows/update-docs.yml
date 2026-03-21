@@ -23,9 +23,6 @@ jobs:
           fetch-depth: 50
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # All steps below run in the checkout workspace (not the Docker deployment dir)
-      # so git commands operate on the freshly-checked-out history
-
       - name: Check for code changes (skip if only .md files changed)
         id: check
         shell: pwsh
@@ -34,10 +31,10 @@ jobs:
           $codeChanged = $changed | Where-Object { $_ -notmatch '\.md$' }
           if (-not $codeChanged) {
             "skip=true" >> $env:GITHUB_OUTPUT
-            Write-Host "Only markdown changes — skipping doc update"
+            Write-Host "Only markdown changes - skipping doc update"
           } else {
             "skip=false" >> $env:GITHUB_OUTPUT
-            Write-Host "Code changes detected — will update docs"
+            Write-Host "Code changes detected - will update docs"
           }
 
       - name: Skip if last commit was from docs-bot
@@ -48,22 +45,23 @@ jobs:
           $lastMsg = git log -1 --pretty=%s
           if ($lastMsg -match '\[docs-bot\]') {
             "skip=true" >> $env:GITHUB_OUTPUT
-            Write-Host "Last commit was from docs-bot — skipping to avoid loop"
+            Write-Host "Last commit was from docs-bot - skipping to avoid loop"
           } else {
             "skip=false" >> $env:GITHUB_OUTPUT
           }
 
-      - name: Install dependencies
-        if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
-        shell: pwsh
-        run: pip install anthropic
-
-      - name: Run documentation updater
+      - name: Run documentation updater via Docker
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
         shell: pwsh
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python -m scripts.update_docs
+        run: |
+          docker run --rm `
+            -v "${PWD}:/app" `
+            -w /app `
+            -e ANTHROPIC_API_KEY=$env:ANTHROPIC_API_KEY `
+            python:3.11-slim `
+            sh -c "pip install -q anthropic && python -m scripts.update_docs"
 
       - name: Commit and push README/CLAUDE.md changes
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'
@@ -74,6 +72,8 @@ jobs:
             Write-Host "No documentation changes to commit"
             exit 0
           }
+          git config user.name "docs-bot"
+          git config user.email "docs-bot@users.noreply.github.com"
           git add -- '*.md'
           git commit -m "[docs-bot] Auto-update documentation from code changes"
           git push origin main

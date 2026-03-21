@@ -1,12 +1,35 @@
 import { useState, useRef, useEffect } from 'react'
 
+// Storage key for persisting chat across page navigation
+const STORAGE_KEY = 'ai_chat_state'
+
+function loadChatState() {
+  try {
+    const saved = sessionStorage.getItem(STORAGE_KEY)
+    if (saved) return JSON.parse(saved)
+  } catch { /* ignore corrupt data */ }
+  return { messages: [], sessionId: null }
+}
+
+function saveChatState(messages, sessionId) {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ messages, sessionId }))
+  } catch { /* storage full or unavailable */ }
+}
+
 export default function Chat() {
-  const [messages, setMessages] = useState([])
+  const initial = useRef(loadChatState())
+  const [messages, setMessages] = useState(initial.current.messages)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [sessionId, setSessionId] = useState(null)
+  const [sessionId, setSessionId] = useState(initial.current.sessionId)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+
+  // Persist chat state whenever messages or sessionId change
+  useEffect(() => {
+    saveChatState(messages, sessionId)
+  }, [messages, sessionId])
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -52,7 +75,21 @@ export default function Chat() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
-      <h2 className="text-2xl font-bold mb-4">AI Chat</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-2xl font-bold">AI Chat</h2>
+        {messages.length > 0 && (
+          <button
+            onClick={() => {
+              setMessages([])
+              setSessionId(null)
+              sessionStorage.removeItem(STORAGE_KEY)
+            }}
+            className="px-3 py-1.5 text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded transition-colors"
+          >
+            Clear Chat
+          </button>
+        )}
+      </div>
 
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto mb-4 space-y-3 pr-2">

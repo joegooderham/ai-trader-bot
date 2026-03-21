@@ -61,7 +61,7 @@ jobs:
             -w /app `
             -e ANTHROPIC_API_KEY=$env:ANTHROPIC_API_KEY `
             python:3.11-slim `
-            sh -c "pip install -q anthropic && python -m scripts.update_docs"
+            sh -c "apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1 && pip install -q anthropic && python -m scripts.update_docs"
 
       - name: Commit and push README/CLAUDE.md changes
         if: steps.check.outputs.skip != 'true' && steps.check_bot.outputs.skip != 'true'

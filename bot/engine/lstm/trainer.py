@@ -277,7 +277,7 @@ class LSTMTrainer:
         # Learning rate scheduler — halves LR when val loss plateaus.
         # This prevents the optimiser from overshooting once it's close to a minimum.
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=3, verbose=False
+            optimizer, mode="min", factor=0.5, patience=3
         )
 
         # Weighted random sampler — oversamples minority classes (BUY/SELL)

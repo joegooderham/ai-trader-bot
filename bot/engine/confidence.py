@@ -7,6 +7,7 @@ Every trade decision goes through this module. It takes:
   1. Technical indicator values (RSI, MACD, etc.)
   2. MCP context (economic calendar, sentiment, correlations, etc.)
   3. ML model prediction (LSTM neural network)
+  4. News sentiment score (from Alpha Vantage via market_data.py)
 
 And produces:
   - A confidence score (0–100%)
@@ -16,12 +17,16 @@ And produces:
 The reasoning is logged and sent to you via Telegram so you always know
 EXACTLY why the bot made a decision. Nothing is a black box.
 
-Confidence Score Breakdown:
-  50% — LSTM Neural Network prediction
-  20% — MACD + RSI consensus
-  15% — EMA trend alignment
-  10% — Bollinger Band position
+Confidence Score Breakdown (when LSTM is disabled/shadow mode):
+  25% — MACD + RSI consensus
+  25% — RSI position (standalone)
+  20% — EMA trend alignment
+  15% — Bollinger Band position
+  10% — News sentiment (Alpha Vantage)
    5% — Volume confirmation
+
+When LSTM is active, its 50% weight is additive and the above weights
+are read from config.yaml — the breakdown above is the non-LSTM default.
 """
 
 from dataclasses import dataclass
@@ -50,7 +55,8 @@ def calculate_confidence(
     indicators: IndicatorResult,
     mcp_context: dict,
     ml_prediction: Optional[dict] = None,
-    mtf_context: Optional[dict] = None
+    mtf_context: Optional[dict] = None,
+    sentiment: Optional[dict] = None,
 ) -> ConfidenceResult:
     """
     Calculate the overall confidence score for a potential trade.
@@ -212,6 +218,34 @@ def calculate_confidence(
         reasoning_parts.append(f"Volume is low ({indicators.relative_volume:.1f}x avg) — signal less reliable")
 
     breakdown["volume"] = round(vol_score * weights["volume_confirmation"] / 100, 2)
+
+    # News Sentiment score (10% weight — from Alpha Vantage via market_data.py)
+    # Sentiment score ranges from -1.0 (very bearish) to +1.0 (very bullish).
+    # We convert this to 0-100 scale relative to the trade direction:
+    #   BUY + positive sentiment = high score, BUY + negative sentiment = low score
+    #   SELL + negative sentiment = high score, SELL + positive sentiment = low score
+    sentiment_weight = weights.get("news_sentiment", 0)
+    if sentiment_weight > 0 and sentiment:
+        raw_sentiment = sentiment.get("score", 0.0)
+        sentiment_label = sentiment.get("label", "Neutral")
+
+        if direction == "BUY":
+            # Positive sentiment supports BUY — map [-1, +1] to [0, 100]
+            sentiment_score = max(0, min(100, (raw_sentiment + 1) * 50))
+        else:
+            # Negative sentiment supports SELL — invert the mapping
+            sentiment_score = max(0, min(100, (-raw_sentiment + 1) * 50))
+
+        if sentiment_label != "Neutral":
+            reasoning_parts.append(
+                f"News sentiment: {sentiment_label} ({raw_sentiment:+.3f}) — "
+                f"{'supports' if sentiment_score >= 50 else 'opposes'} {direction}"
+            )
+
+        breakdown["news_sentiment"] = round(sentiment_score * sentiment_weight / 100, 2)
+    else:
+        # No sentiment data — contribute zero to the score (other weights compensate)
+        breakdown["news_sentiment"] = 0.0
 
     # ── Step 3: Apply MCP context modifiers ───────────────────────────────────
     mcp_modifier = _apply_mcp_context(pair, direction, mcp_context, reasoning_parts)

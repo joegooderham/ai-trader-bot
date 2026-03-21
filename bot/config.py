@@ -61,6 +61,13 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 GITHUB_PAT = os.getenv("GITHUB_PAT", "")
 GITHUB_REPO = os.getenv("GITHUB_REPO", "joegooderham/ai-trader-bot")
 
+# ── External Data Sources ─────────────────────────────────────────────────────
+# API keys for Finnhub, Alpha Vantage, and Twelve Data market data providers.
+# If a key is not set, that source is disabled and the fallback chain skips it.
+FINNHUB_API_KEY        = os.getenv("FINNHUB_API_KEY", "")
+ALPHA_VANTAGE_API_KEY  = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+TWELVE_DATA_API_KEY    = os.getenv("TWELVE_DATA_API_KEY", "")
+
 # ── Capital & Risk ────────────────────────────────────────────────────────────
 
 MAX_CAPITAL               = float(os.getenv("MAX_CAPITAL", 500))
@@ -141,6 +148,16 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 INITIAL_HISTORY_DAYS = _cfg["data"]["initial_history_days"]
 
+# ── External Data Source Toggles ──────────────────────────────────────────────
+# Each source can be enabled/disabled independently in config.yaml.
+# Disabled sources are skipped in the fallback chain without error.
+_data_sources = _cfg.get("data_sources", {})
+FINNHUB_ENABLED        = _data_sources.get("finnhub_enabled", True)
+ALPHA_VANTAGE_ENABLED  = _data_sources.get("alpha_vantage_enabled", True)
+TWELVE_DATA_ENABLED    = _data_sources.get("twelve_data_enabled", True)
+INDICATOR_CACHE_MINUTES = _data_sources.get("indicator_cache_minutes", 60)
+HISTORICAL_BACKFILL_DAYS = _data_sources.get("historical_backfill_days", 365)
+
 # ── Notifications ─────────────────────────────────────────────────────────────
 
 TIMEZONE                  = _cfg["notifications"]["timezone"]
@@ -186,3 +203,6 @@ def validate():
     logger.info(f"   Max capital: £{MAX_CAPITAL}")
     logger.info(f"   Pairs to trade: {', '.join(PAIRS)}")
     logger.info(f"   Min confidence to trade: {MIN_CONFIDENCE_SCORE}%")
+    logger.info(f"   Data sources: Finnhub={'ON' if FINNHUB_ENABLED and FINNHUB_API_KEY else 'OFF'}, "
+                f"Alpha Vantage={'ON' if ALPHA_VANTAGE_ENABLED and ALPHA_VANTAGE_API_KEY else 'OFF'}, "
+                f"Twelve Data={'ON' if TWELVE_DATA_ENABLED and TWELVE_DATA_API_KEY else 'OFF'}")

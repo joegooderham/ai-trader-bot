@@ -48,14 +48,15 @@ The system has three runtime processes orchestrated via docker-compose:
 ### Trade Decision Flow
 
 Each 15-minute scan:
-1. Fetch candles from IG API (`broker/ig_client.py`) — cached to stay within IG demo's 10k points/week allowance
+1. Fetch candles via unified data manager (`data/market_data.py`) — fallback chain: Finnhub → Twelve Data → IG API → pause + alert
 2. **Save candles to SQLite** (`data/storage.py`) — live broker data feeds into LSTM training
 3. Calculate technical indicators (`bot/engine/indicators.py`) — RSI, MACD, Bollinger Bands, EMA crossover, ATR, volume
-4. Get LSTM prediction (`bot/engine/lstm/predictor.py`) — BUY/SELL/HOLD with probability
-5. Fetch market context from MCP server (`mcp_server/server.py`)
-6. Score confidence 0-100% (`bot/engine/confidence.py`) — weighted: LSTM 50%, MACD/RSI 20%, EMA 15%, Bollinger 10%, Volume 5%
-7. If score >= 60%, calculate position size (`risk/position_sizer.py`) using ATR-based stops and 2% risk per trade
-8. Place trade via IG API, notify via Telegram
+4. Fetch Alpha Vantage indicators + news sentiment via `market_data.get_indicators()` / `market_data.get_sentiment()`
+5. Get LSTM prediction (`bot/engine/lstm/predictor.py`) — BUY/SELL/HOLD with probability
+6. Fetch market context from MCP server (`mcp_server/server.py`)
+7. Score confidence 0-100% (`bot/engine/confidence.py`) — weighted: MACD/RSI 25%, EMA 20%, Bollinger 15%, Sentiment 10%, Volume 5% (+ LSTM 50% when active)
+8. If score >= 60%, calculate position size (`risk/position_sizer.py`) using ATR-based stops and 2% risk per trade
+9. Place trade via IG API, notify via Telegram
 
 ### LSTM v2 Architecture
 
@@ -105,6 +106,30 @@ Real-time monitoring of LSTM performance:
 | `bot/engine/lstm/` | LSTM v2: model (attention), features (18), trainer (weighted sampling), predictor, drift detector |
 | `bot/analytics/metrics.py` | Computes rolling LSTM accuracy, edge vs indicators, per-pair performance, weekly trends |
 | `bot/instance.py` | Multi-instance heartbeat coordination (single instance currently) |
+| `data/market_data.py` | Unified data manager — single interface for all market data with fallback chain |
+| `data/sources/finnhub_client.py` | Finnhub forex candle client (primary live source, 55 req/min rate limiter) |
+| `data/sources/alpha_vantage_client.py` | Alpha Vantage indicators + news sentiment (60-min cache, 20 calls/day limit) |
+| `data/sources/twelve_data_client.py` | Twelve Data historical candles (startup backfill + nightly top-up) |
+
+### Multi-Source Data Architecture
+
+The bot uses three external data providers alongside the existing IG API, orchestrated through a unified data manager (`data/market_data.py`):
+
+**Fallback chain for live candles:** Finnhub → Twelve Data → IG API → pause + Telegram alert
+
+| Source | Purpose | Rate Limit | API Key Secret |
+|--------|---------|-----------|----------------|
+| Finnhub | Primary live candle source (1/5/15/60 min) | 55 req/min (buffer below 60 limit) | `FINNHUB_API_KEY` |
+| Alpha Vantage | Pre-computed RSI, MACD, BBands, EMA + news sentiment | 20 calls/day (buffer below 25 limit) | `ALPHA_VANTAGE_API_KEY` |
+| Twelve Data | Historical candle backfill (startup) + nightly top-up at 23:00 UTC | 800 calls/day | `TWELVE_DATA_API_KEY` |
+| IG API | Last-resort candle fallback + trade execution | 10k points/week | `IG_API_KEY` (existing) |
+
+- **Alpha Vantage indicators** are fetched via `market_data.get_indicators()` and cached for 60 minutes
+- **News sentiment** from Alpha Vantage feeds into the confidence score at 10% weight
+- **Historical backfill** runs once on startup via `market_data.backfill_all_pairs()` — stores in SQLite for LSTM training
+- **Nightly top-up** at 23:00 UTC adds the day's candles from Twelve Data
+- All sources are individually toggleable in `config.yaml` under `data_sources:`
+- If a source's API key is not set, it's silently skipped in the fallback chain
 
 ### Dual Telegram Bots
 
@@ -144,7 +169,7 @@ Two separate Telegram bots keep trading signals and system ops separate:
 
 ## Configuration
 
-- **Environment variables**: Copy `.env.example` to `.env` and fill in IG, Telegram, Anthropic API, and GitHub PAT credentials
+- **Environment variables**: Copy `.env.example` to `.env` and fill in IG, Telegram, Anthropic API, GitHub PAT, and data source API keys (Finnhub, Alpha Vantage, Twelve Data)
 - **Trading parameters**: `config/config.yaml` — pairs, timeframes, confidence thresholds, risk settings, schedule times, LSTM architecture
 - **Config is loaded once** at import time by `bot/config.py`; changes require restart
 

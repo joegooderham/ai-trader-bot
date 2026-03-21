@@ -117,11 +117,13 @@ confidence:
 
   # Weighting of each component in the final confidence score
   # All weights must add up to 100
+  # Updated to include news sentiment from Alpha Vantage (10% weight)
   weights:
-    lstm_model: 50          # AI neural network prediction
-    macd_rsi_consensus: 20  # MACD and RSI agreement
-    ema_trend_alignment: 15 # Short/long EMA trend direction
-    bollinger_position: 10  # Price position relative to Bollinger Bands
+    lstm_model: 50          # AI neural network prediction (only when LSTM active)
+    macd_rsi_consensus: 25  # MACD and RSI agreement
+    ema_trend_alignment: 20 # Short/long EMA trend direction
+    bollinger_position: 15  # Price position relative to Bollinger Bands
+    news_sentiment: 10      # Alpha Vantage news sentiment score
     volume_confirmation: 5  # Volume validates the signal
 
 risk:
@@ -264,6 +266,31 @@ lstm:
   batch_size: 64                # Samples per gradient update
   learning_rate: 0.001          # Adam optimizer learning rate (halved automatically on plateau)
   patience: 7                   # Stop if val loss doesn't improve for this many epochs
+
+# ─────────────────────────────────────────────────────────────────────────────
+# External Data Sources
+#
+# Three external market data providers supplement the existing IG API:
+#   Finnhub    — primary live candle source (60 req/min free tier)
+#   Alpha Vantage — pre-computed indicators + news sentiment (25 calls/day)
+#   Twelve Data   — deep historical data for LSTM training (800 calls/day)
+#
+# Fallback chain for live candles: Finnhub → Twelve Data → IG API → pause
+# Set any source to false to disable it without removing the API key.
+# ─────────────────────────────────────────────────────────────────────────────
+
+data_sources:
+  finnhub_enabled: true
+  alpha_vantage_enabled: true
+  twelve_data_enabled: true
+
+  # How long to cache Alpha Vantage indicator results in memory (minutes)
+  # Alpha Vantage free tier is 25 calls/day — caching prevents unnecessary re-fetches
+  indicator_cache_minutes: 60
+
+  # Days of historical data to backfill from Twelve Data on startup
+  # Used for LSTM training — Twelve Data supports up to 5000 rows per request
+  historical_backfill_days: 365
 
 data:
   # Number of days of historical data to fetch on first startup

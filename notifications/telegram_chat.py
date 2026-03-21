@@ -99,6 +99,7 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("status", self.cmd_status))
         self.app.add_handler(CommandHandler("report", self.cmd_report))
         self.app.add_handler(CommandHandler("setconfidence", self.cmd_set_confidence))
+        self.app.add_handler(CommandHandler("getconfidence", self.cmd_get_confidence))
         self.app.add_handler(CommandHandler("setrisk", self.cmd_set_risk))
         self.app.add_handler(CommandHandler("settings", self.cmd_settings))
         self.app.add_handler(CommandHandler("deploy", self.cmd_deploy))
@@ -1432,6 +1433,32 @@ class TelegramChatHandler:
 
         except ValueError:
             await update.message.reply_text("⚠️ Invalid number. Usage: `/setconfidence 50`", parse_mode=ParseMode.MARKDOWN)
+
+    async def cmd_get_confidence(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show the current confidence threshold and where it's sourced from."""
+        chat_id = str(update.effective_chat.id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            return
+
+        import yaml
+        try:
+            with open(config.CONFIG_PATH, "r") as f:
+                yaml_cfg = yaml.safe_load(f)
+            yaml_value = yaml_cfg.get("confidence", {}).get("min_to_trade", "?")
+        except Exception:
+            yaml_value = "?"
+
+        await update.message.reply_text(
+            f"*⚙️ CONFIDENCE THRESHOLD*\n"
+            f"─────────────────────\n"
+            f"*Runtime value:* {config.MIN_CONFIDENCE_SCORE}%\n"
+            f"*config.yaml value:* {yaml_value}%\n"
+            f"*Overnight hold:* {config.HOLD_OVERNIGHT_THRESHOLD}%\n"
+            f"─────────────────────\n"
+            f"_Use `/setconfidence <value>` to change._\n"
+            f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
     async def cmd_set_risk(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Adjust the % risk per trade. Usage: /setrisk 2"""

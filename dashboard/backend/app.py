@@ -889,7 +889,11 @@ _MAX_CHAT_HISTORY = 20
 
 @app.post("/api/chat")
 async def chat(body: dict):
-    """Send a message to Claude with live trading context."""
+    """Send a message to Claude with full trading history context.
+
+    Injects comprehensive data from SQLite so Claude can answer questions
+    about any day, pair, or time period — not just today.
+    """
     message = body.get("message", "").strip()
     session_id = body.get("session_id") or str(uuid.uuid4())
 
@@ -898,50 +902,148 @@ async def chat(body: dict):
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
-    # Gather live context from all data sources
+    # ── Gather comprehensive trading context from SQLite ──────────────
     context_parts = []
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
 
-    # Today's trades from DB
     try:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with get_db() as db:
-            trades = db.execute(
-                "SELECT pair, direction, pl, confidence_score, close_reason, opened_at, closed_at "
-                "FROM trades WHERE opened_at LIKE ? ORDER BY opened_at DESC LIMIT 20",
-                (f"{today}%",)
+            # 1. Daily P&L summary for the last 14 days — lets Claude answer
+            #    "how was Friday?" or "compare this week to last week"
+            daily_rows = db.execute("""
+                SELECT DATE(opened_at) as trade_date,
+                       COUNT(*) as trades,
+                       SUM(CASE WHEN pl > 0.01 THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN pl < -0.01 THEN 1 ELSE 0 END) as losses,
+                       ROUND(SUM(pl), 2) as net_pl,
+                       ROUND(AVG(pl), 2) as avg_pl
+                FROM trades
+                WHERE closed_at IS NOT NULL
+                  GROUP BY trade_date
+                ORDER BY trade_date DESC
+            """).fetchall()
+
+            if daily_rows:
+                context_parts.append("DAILY P&L HISTORY (all dates):")
+                for r in daily_rows:
+                    wr = round(r["wins"] / r["trades"] * 100) if r["trades"] > 0 else 0
+                    context_parts.append(
+                        f"  {r['trade_date']}: {r['trades']} trades, "
+                        f"{r['wins']}W/{r['losses']}L ({wr}% win rate), "
+                        f"P&L: £{r['net_pl']}, avg: £{r['avg_pl']}"
+                    )
+
+            # 2. Per-pair performance (last 14 days)
+            pair_rows = db.execute("""
+                SELECT pair,
+                       COUNT(*) as trades,
+                       SUM(CASE WHEN pl > 0.01 THEN 1 ELSE 0 END) as wins,
+                       ROUND(SUM(pl), 2) as net_pl
+                FROM trades
+                WHERE closed_at IS NOT NULL
+                  GROUP BY pair
+                ORDER BY net_pl DESC
+            """).fetchall()
+
+            if pair_rows:
+                context_parts.append("\nPER-PAIR PERFORMANCE (all-time):")
+                for r in pair_rows:
+                    wr = round(r["wins"] / r["trades"] * 100) if r["trades"] > 0 else 0
+                    context_parts.append(
+                        f"  {r['pair'].replace('_', '/')}: {r['trades']} trades, "
+                        f"{wr}% win rate, P&L: £{r['net_pl']}"
+                    )
+
+            # 3. Direction performance (last 14 days)
+            dir_rows = db.execute("""
+                SELECT direction,
+                       COUNT(*) as trades,
+                       SUM(CASE WHEN pl > 0.01 THEN 1 ELSE 0 END) as wins,
+                       ROUND(SUM(pl), 2) as net_pl
+                FROM trades
+                WHERE closed_at IS NOT NULL
+                  GROUP BY direction
+            """).fetchall()
+
+            if dir_rows:
+                context_parts.append("\nDIRECTION PERFORMANCE (all-time):")
+                for r in dir_rows:
+                    wr = round(r["wins"] / r["trades"] * 100) if r["trades"] > 0 else 0
+                    context_parts.append(
+                        f"  {r['direction']}: {r['trades']} trades, "
+                        f"{wr}% win rate, P&L: £{r['net_pl']}"
+                    )
+
+            # 4. Today's open positions
+            open_trades = db.execute(
+                "SELECT pair, direction, fill_price, confidence_score, opened_at "
+                "FROM trades WHERE closed_at IS NULL ORDER BY opened_at DESC"
             ).fetchall()
-            closed = [dict(t) for t in trades if t["closed_at"]]
-            open_t = [dict(t) for t in trades if not t["closed_at"]]
-            if closed:
-                total_pl = sum(t["pl"] or 0 for t in closed)
-                wins = sum(1 for t in closed if (t["pl"] or 0) > 0)
+
+            if open_trades:
+                context_parts.append(f"\nOPEN POSITIONS ({len(open_trades)}):")
+                for t in open_trades:
+                    context_parts.append(
+                        f"  {t['pair'].replace('_', '/')} {t['direction']} "
+                        f"@ {t['fill_price']} ({t['confidence_score']:.0f}% confidence, "
+                        f"opened {t['opened_at'][:16]})"
+                    )
+
+            # 5. Recent closed trades (last 10) — for "what was the last trade?" questions
+            recent = db.execute(
+                "SELECT pair, direction, pl, confidence_score, close_reason, "
+                "       opened_at, closed_at "
+                "FROM trades WHERE closed_at IS NOT NULL "
+                "ORDER BY closed_at DESC LIMIT 20"
+            ).fetchall()
+
+            if recent:
+                context_parts.append("\nLAST 20 CLOSED TRADES:")
+                for t in recent:
+                    context_parts.append(
+                        f"  {t['opened_at'][:16]} {t['pair'].replace('_', '/')} "
+                        f"{t['direction']} → £{t['pl']:.2f} "
+                        f"({t['close_reason'] or 'unknown'}, {t['confidence_score']:.0f}%)"
+                    )
+
+            # 6. All-time summary
+            alltime = db.execute("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN pl > 0.01 THEN 1 ELSE 0 END) as wins,
+                       ROUND(SUM(pl), 2) as total_pl,
+                       ROUND(AVG(pl), 2) as avg_pl,
+                       MIN(DATE(opened_at)) as first_trade,
+                       MAX(DATE(opened_at)) as last_trade
+                FROM trades WHERE closed_at IS NOT NULL
+            """).fetchone()
+
+            if alltime and alltime["total"] > 0:
+                wr = round(alltime["wins"] / alltime["total"] * 100)
                 context_parts.append(
-                    f"TODAY'S CLOSED TRADES: {len(closed)} trades, {wins} wins, "
-                    f"Net P&L: £{total_pl:.2f}"
+                    f"\nALL-TIME: {alltime['total']} trades, {wr}% win rate, "
+                    f"total P&L: £{alltime['total_pl']}, avg: £{alltime['avg_pl']}/trade "
+                    f"({alltime['first_trade']} to {alltime['last_trade']})"
                 )
-                for t in closed[:5]:
-                    context_parts.append(
-                        f"  {t['pair']} {t['direction']} → £{t['pl']:.2f} ({t['close_reason']})"
-                    )
-            if open_t:
-                context_parts.append(f"OPEN POSITIONS: {len(open_t)}")
-                for t in open_t:
-                    context_parts.append(
-                        f"  {t['pair']} {t['direction']} @ {t['confidence_score']:.0f}% confidence"
-                    )
+
     except Exception as e:
-        context_parts.append(f"(Could not fetch trades: {e})")
+        context_parts.append(f"(Database query error: {e})")
 
     # Bot status from command API
     try:
         status = await bot_cmd("/cmd/status", method="GET")
         paused = "PAUSED" if status.get("paused") else "ACTIVE"
-        context_parts.append(f"BOT STATUS: {paused}")
+        context_parts.append(f"\nBOT STATUS: {paused}")
         if status.get("disabled_directions"):
             context_parts.append(f"DISABLED DIRECTIONS: {', '.join(status['disabled_directions'])}")
         if status.get("disabled_pairs"):
             context_parts.append(f"DISABLED PAIRS: {', '.join(status['disabled_pairs'])}")
-        context_parts.append(f"MIN CONFIDENCE: {status.get('min_confidence', '?')}%")
+        context_parts.append(
+            f"CONFIG: min_confidence={status.get('min_confidence', '?')}%, "
+            f"risk={status.get('per_trade_risk_pct', '?')}%, "
+            f"SL={status.get('stop_loss_atr_multiplier', '?')}x ATR, "
+            f"TP={status.get('take_profit_ratio', '?')}:1"
+        )
     except Exception:
         context_parts.append("(Bot status unavailable)")
 
@@ -959,15 +1061,19 @@ async def chat(body: dict):
     except Exception:
         pass
 
-    # Build system prompt
-    context_text = "\n".join(context_parts) if context_parts else "No live data available."
+    # Build system prompt with full historical context
+    context_text = "\n".join(context_parts) if context_parts else "No trading data available."
     system_prompt = (
         "You are an AI trading assistant for Joseph's forex day trading bot. "
-        "You have access to live trading data shown below. Answer questions about "
-        "trading performance, strategy, positions, and market conditions. "
-        "Be concise, data-driven, and use the live context to give specific answers. "
-        "Format numbers clearly (£ for GBP amounts). Keep responses under 300 words.\n\n"
-        f"LIVE TRADING CONTEXT:\n{context_text}"
+        "You have access to the COMPLETE trading history below — every day's P&L, "
+        "per-pair and per-direction performance, recent individual trades, open positions, "
+        "and current bot configuration. Use this data to answer questions about "
+        "ANY day, pair, time period, or pattern. "
+        "Be concise, data-driven, and always cite specific numbers from the data. "
+        "If the user asks about a specific date, find it in the daily P&L history. "
+        f"Today's date is {today} (UTC). The bot trades forex on IG Group (demo account, £500 capital). "
+        "Format amounts as £. Keep responses under 500 words.\n\n"
+        f"COMPLETE TRADING DATA:\n{context_text}"
     )
 
     # Get or create conversation history

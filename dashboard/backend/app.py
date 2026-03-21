@@ -1270,6 +1270,171 @@ async def pl_intraday():
         return []
 
 
+# ── API Routes: What-If Simulator ────────────────────────────────────────────
+
+@app.post("/api/analysis/what-if")
+async def what_if_simulation(body: dict):
+    """Simulate how historical trades would have performed under different settings.
+
+    Takes a set of hypothetical config values and replays all trades from a
+    given period, filtering out trades that wouldn't have passed the new rules.
+    Returns actual vs simulated P&L comparison.
+
+    Body:
+      days: int (default 7) — how many days to look back
+      min_confidence: float (optional) — hypothetical min confidence threshold
+      disabled_directions: list[str] (optional) — e.g. ["SELL"]
+      disabled_pairs: list[str] (optional) — e.g. ["GBP_JPY"]
+      hold_overnight_threshold: float (optional) — hypothetical overnight hold %
+    """
+    days = body.get("days", 7)
+    sim_min_conf = body.get("min_confidence")
+    sim_disabled_dirs = set(d.upper() for d in body.get("disabled_directions", []))
+    sim_disabled_pairs = set(p.upper().replace("/", "_") for p in body.get("disabled_pairs", []))
+    sim_overnight = body.get("hold_overnight_threshold")
+
+    try:
+        with get_db() as db:
+            rows = db.execute("""
+                SELECT id, pair, direction, pl, confidence_score, close_reason,
+                       opened_at, closed_at, fill_price, close_price, stop_loss, take_profit
+                FROM trades
+                WHERE closed_at IS NOT NULL
+                  AND opened_at >= date('now', ?)
+                ORDER BY opened_at
+            """, (f"-{days} days",)).fetchall()
+
+        actual_trades = [dict(r) for r in rows]
+        if not actual_trades:
+            return {
+                "days": days,
+                "actual": {"trades": 0, "pl": 0, "wins": 0, "win_rate": 0},
+                "simulated": {"trades": 0, "pl": 0, "wins": 0, "win_rate": 0},
+                "filtered_out": [],
+                "kept": [],
+            }
+
+        kept = []
+        filtered_out = []
+
+        for t in actual_trades:
+            reasons = []
+
+            # Check confidence threshold
+            if sim_min_conf is not None and t["confidence_score"] is not None:
+                if t["confidence_score"] < sim_min_conf:
+                    reasons.append(f"confidence {t['confidence_score']:.0f}% < {sim_min_conf}%")
+
+            # Check disabled directions
+            if t["direction"] in sim_disabled_dirs:
+                reasons.append(f"{t['direction']} direction disabled")
+
+            # Check disabled pairs
+            if t["pair"] in sim_disabled_pairs:
+                reasons.append(f"{t['pair'].replace('_', '/')} pair disabled")
+
+            # Check overnight hold threshold — if the trade was closed due to EOD
+            # and the new threshold is lower, it might have survived
+            close_reason = (t["close_reason"] or "").lower()
+            is_eod_close = any(x in close_reason for x in ["eod", "end of day", "force close"])
+
+            if is_eod_close and sim_overnight is not None:
+                # If the trade's confidence was above the new overnight threshold
+                # AND it was profitable, it would have been held instead of closed
+                if t["confidence_score"] and t["confidence_score"] >= sim_overnight and (t["pl"] or 0) > 0:
+                    # Mark this trade as "would have been held overnight" —
+                    # we can't know the final outcome, so flag it
+                    t["_would_hold_overnight"] = True
+
+            if reasons:
+                t["_filter_reasons"] = reasons
+                filtered_out.append(t)
+            else:
+                kept.append(t)
+
+        # Calculate actual stats
+        actual_pl = sum(t["pl"] or 0 for t in actual_trades)
+        actual_wins = sum(1 for t in actual_trades if (t["pl"] or 0) > 0.01)
+
+        # Calculate simulated stats (only kept trades)
+        sim_pl = sum(t["pl"] or 0 for t in kept)
+        sim_wins = sum(1 for t in kept if (t["pl"] or 0) > 0.01)
+
+        # P&L of filtered-out trades (what we would have avoided)
+        filtered_pl = sum(t["pl"] or 0 for t in filtered_out)
+        filtered_wins = sum(1 for t in filtered_out if (t["pl"] or 0) > 0.01)
+        filtered_losses = sum(1 for t in filtered_out if (t["pl"] or 0) < -0.01)
+
+        # Per-pair breakdown of filtered trades
+        filtered_by_pair = {}
+        for t in filtered_out:
+            pair = t["pair"]
+            if pair not in filtered_by_pair:
+                filtered_by_pair[pair] = {"trades": 0, "pl": 0}
+            filtered_by_pair[pair]["trades"] += 1
+            filtered_by_pair[pair]["pl"] += t["pl"] or 0
+
+        # Per-reason breakdown
+        reason_counts = {}
+        for t in filtered_out:
+            for r in t.get("_filter_reasons", []):
+                reason_counts[r] = reason_counts.get(r, 0) + 1
+
+        # Format for response
+        def fmt_trade(t):
+            return {
+                "id": t["id"],
+                "pair": t["pair"],
+                "direction": t["direction"],
+                "pl": round(t["pl"] or 0, 2),
+                "confidence": t["confidence_score"],
+                "close_reason": t["close_reason"],
+                "opened_at": t["opened_at"],
+                "filter_reasons": t.get("_filter_reasons", []),
+                "would_hold_overnight": t.get("_would_hold_overnight", False),
+            }
+
+        return {
+            "days": days,
+            "settings_tested": {
+                "min_confidence": sim_min_conf,
+                "disabled_directions": sorted(sim_disabled_dirs) if sim_disabled_dirs else None,
+                "disabled_pairs": sorted(sim_disabled_pairs) if sim_disabled_pairs else None,
+                "hold_overnight_threshold": sim_overnight,
+            },
+            "actual": {
+                "trades": len(actual_trades),
+                "pl": round(actual_pl, 2),
+                "wins": actual_wins,
+                "losses": len(actual_trades) - actual_wins,
+                "win_rate": round(actual_wins / len(actual_trades) * 100, 1) if actual_trades else 0,
+            },
+            "simulated": {
+                "trades": len(kept),
+                "pl": round(sim_pl, 2),
+                "wins": sim_wins,
+                "losses": len(kept) - sim_wins,
+                "win_rate": round(sim_wins / len(kept) * 100, 1) if kept else 0,
+            },
+            "improvement": {
+                "pl_difference": round(sim_pl - actual_pl, 2),
+                "trades_avoided": len(filtered_out),
+                "avoided_pl": round(filtered_pl, 2),
+                "avoided_wins": filtered_wins,
+                "avoided_losses": filtered_losses,
+            },
+            "filtered_by_pair": {k: {"trades": v["trades"], "pl": round(v["pl"], 2)}
+                                 for k, v in sorted(filtered_by_pair.items(), key=lambda x: x[1]["pl"])},
+            "filter_reasons": reason_counts,
+            "filtered_out": [fmt_trade(t) for t in filtered_out],
+            "kept": [fmt_trade(t) for t in kept[:20]],  # First 20 for display
+        }
+
+    except Exception as e:
+        logger.error(f"What-if simulation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Serve React Frontend ────────────────────────────────────────────────────
 # Mount static files LAST so API routes take priority
 

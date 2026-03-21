@@ -15,6 +15,7 @@ import Chat from './pages/Chat'
 import TradeJournal from './pages/TradeJournal'
 import Heatmap from './pages/Heatmap'
 import SessionAnalysis from './pages/SessionAnalysis'
+import WhatIf from './pages/WhatIf'
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/heatmap" element={<Heatmap />} />
         <Route path="/sessions" element={<SessionAnalysis />} />
+        <Route path="/what-if" element={<WhatIf />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/remediation" element={<Remediation />} />
         <Route path="/config" element={<ConfigEditor />} />

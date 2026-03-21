@@ -368,6 +368,21 @@ class TradeStorage:
         finally:
             conn.close()
 
+    def get_trades_for_date_range(self, start_date: str, end_date: str) -> list:
+        """
+        Get all trades opened between two dates (YYYY-MM-DD format, inclusive).
+        Used for week-over-week comparison in the weekly strategy review.
+        """
+        conn = _get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM trades WHERE opened_at >= ? AND opened_at < ? ORDER BY opened_at",
+                (start_date, end_date)
+            ).fetchall()
+            return [self._row_to_dict(r) for r in rows]
+        finally:
+            conn.close()
+
     def get_all_trades(self) -> list:
         """Return all trade history."""
         conn = _get_connection()

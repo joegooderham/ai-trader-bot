@@ -26,8 +26,8 @@ import sqlite3
 import subprocess
 from datetime import datetime, timezone, timedelta
 from loguru import logger
-from telegram import Update, Bot
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
+from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 import anthropic
 import httpx
@@ -106,6 +106,9 @@ class TelegramChatHandler:
         self.app.add_handler(CommandHandler("integrity", self.cmd_integrity))
         self.app.add_handler(CommandHandler("action", self.cmd_action))
         self.app.add_handler(CommandHandler("discuss", self.cmd_discuss))
+
+        # Inline button callbacks for remediation approve/reject actions
+        self.app.add_handler(CallbackQueryHandler(self.handle_callback))
 
         return self.app
 
@@ -1511,6 +1514,11 @@ class TelegramChatHandler:
                 f"  Shadow Mode: {shadow_mode}\n"
                 f"  Retrain Interval: {config.LSTM_RETRAIN_INTERVAL_MIN} min\n"
                 f"─────────────────────\n"
+                f"*Remediation:*\n"
+                f"  Disabled Directions: {', '.join(sorted(config.DISABLED_DIRECTIONS)) or 'None'}\n"
+                f"  Disabled Pairs: {', '.join(p.replace('_','/') for p in sorted(config.DISABLED_PAIRS)) or 'None'}\n"
+                f"  Auto-Pause Threshold: £{config.AUTOPAUSE_WEEKLY_LOSS_THRESHOLD}\n"
+                f"─────────────────────\n"
                 f"*Infrastructure:*\n"
                 f"  Streaming: {streaming}\n"
                 f"  P&L Alert Threshold: £{config.STREAMING_PL_ALERT_THRESHOLD}\n"
@@ -1737,6 +1745,91 @@ class TelegramChatHandler:
                 # Markdown parse failed — send without formatting so the message still arrives
                 logger.warning("Markdown parse failed, resending chunk without formatting")
                 await update.message.reply_text(chunk)
+
+    # ── Inline Button Callback Handler ────────────────────────────────────────
+
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle inline keyboard button presses (approve/reject remediation actions).
+
+        Callback data format: action_approve:{id} or action_reject:{id}
+        Edits the original message to show the outcome so the button can't be pressed twice.
+        """
+        query = update.callback_query
+        if not query:
+            return
+
+        # Authorise — only the configured chat can press buttons
+        chat_id = str(query.message.chat_id)
+        if chat_id != str(config.TELEGRAM_CHAT_ID):
+            await query.answer("Unauthorised.", show_alert=True)
+            return
+
+        data = query.data or ""
+        await query.answer()  # Acknowledge the button press immediately
+
+        try:
+            import bot.scheduler as scheduler
+            monitor = scheduler.integrity_monitor
+
+            if data.startswith("action_approve:"):
+                action_id = int(data.split(":")[1])
+                result = monitor.apply_action(action_id)
+
+                # Edit original message to show it was approved
+                try:
+                    original_text = query.message.text or ""
+                    # Append outcome to the original message (truncate if needed)
+                    updated = original_text[:3500] + f"\n\n✅ *Action #{action_id} APPROVED and applied.*"
+                    await query.edit_message_text(
+                        text=updated,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception:
+                    # If editing fails, just send a new message
+                    pass
+
+                # Send the detailed result as a follow-up
+                await self._send_safe_to_chat(query.message.chat_id, result, context)
+
+            elif data.startswith("action_reject:"):
+                action_id = int(data.split(":")[1])
+
+                # Remove from pending
+                monitor.pending_actions = [
+                    a for a in monitor.pending_actions if a.action_id != action_id
+                ]
+
+                # Edit original message to show rejection
+                try:
+                    original_text = query.message.text or ""
+                    updated = original_text[:3500] + f"\n\n❌ *Action #{action_id} REJECTED — no changes made.*"
+                    await query.edit_message_text(
+                        text=updated,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception:
+                    pass
+
+            else:
+                logger.warning(f"Unknown callback data: {data}")
+
+        except Exception as e:
+            logger.error(f"Callback handler error: {e}")
+            try:
+                await query.edit_message_text(
+                    text=f"⚠️ Error processing action: {str(e)[:200]}"
+                )
+            except Exception:
+                pass
+
+    async def _send_safe_to_chat(self, chat_id, text: str, context):
+        """Send a message to a specific chat with Markdown fallback."""
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            await context.bot.send_message(chat_id=chat_id, text=text)
 
     async def cmd_integrity(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Run a full profit integrity check and report results."""

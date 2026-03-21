@@ -1,9 +1,11 @@
 """
-bot/analytics/integrity_monitor.py — Profit Integrity & Contingency Monitor
+bot/analytics/integrity_monitor.py — Automated Trading Remediation System
 ─────────────────────────────────────────────────────────────────────────────
-Proactively detects trading anomalies before they compound into serious losses.
-Runs at three frequencies and ALWAYS sends a Telegram report — even when
-everything is healthy — so you have full visibility of all trading activity.
+Proactively detects trading anomalies, diagnoses root causes, and presents
+targeted fixes via Telegram inline buttons. The user taps Approve/Reject —
+no restart needed, changes apply immediately at runtime.
+
+Detection → Recommendation → Telegram Inline Buttons → Approve → Apply
 
   1. QUICK CHECK (after every 15-min scan):
      - Validates SL/TP distances aren't too tight (spread vs ATR sanity)
@@ -12,29 +14,35 @@ everything is healthy — so you have full visibility of all trading activity.
 
   2. HOURLY REVIEW:
      - Analyses all trades closed in the rolling 24h window
-     - Detects patterns: breakeven streaks, win rate collapse, P&L drift
-     - Checks average trade duration (too short = stops too tight)
-     - Validates trailing stop behaviour
-     - ALWAYS sends a report with current status + any recommendations
+     - Smart losing streak analysis (diagnoses WHY — direction, pair, confidence)
+     - Direction performance alert (detects one-sided failure)
+     - Auto-pause on sustained weekly losses (fires autonomously)
+     - ALWAYS sends a report with inline buttons for any recommendations
 
   3. DEEP REVIEW (every 4 hours):
      - Per-pair profitability analysis
      - Config effectiveness scoring (are current settings producing profit?)
      - LSTM vs indicator-only comparison (is the model helping or hurting?)
-     - Generates numbered actionable recommendations
-     - ALWAYS sends full report + options you can reply to
+     - Generates numbered actionable recommendations with inline buttons
 
-Every recommendation comes with clear reply commands:
-  /action 1  — Apply recommendation #1
-  /action 2  — Apply recommendation #2
-  /discuss 1 — Ask Claude to explain recommendation #1 in detail
+  4. WEEKLY STRATEGY REVIEW (Monday 00:15 UTC):
+     - Compares this week vs last week: trade count, win rate, P&L
+     - Flags pairs that flipped from profitable to unprofitable
+     - Recommends defensive adjustments if P&L declined >20%
 
-Alerts go via the SYSTEM Telegram bot so they don't mix with trade signals.
+  5. DAILY LSTM HEALTH (08:00 UTC):
+     - Checks model file age, prediction accuracy (24h/7d)
+     - Computes LSTM edge (confidence delta vs indicator-only)
+     - Recommends shadow mode toggle based on accuracy
+
+All recommendations come with inline [✅ Approve] [❌ Reject] buttons.
+Config changes apply immediately at runtime AND persist to config.yaml.
 """
 
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 from typing import Optional
+from pathlib import Path
 
 from data.storage import TradeStorage
 from bot import config
@@ -42,10 +50,10 @@ from bot import config
 
 # ── Actionable Recommendations ────────────────────────────────────────────────
 # Each recommendation has an ID, description, and the config change it would make.
-# When the user replies /action <id>, the bot applies the change.
+# When the user taps Approve, the bot applies the change at runtime.
 
 class ActionableRecommendation:
-    """A recommendation the user can approve via Telegram."""
+    """A recommendation the user can approve via Telegram inline buttons."""
 
     def __init__(self, action_id: int, title: str, detail: str,
                  config_key: str = None, config_value=None,
@@ -56,23 +64,24 @@ class ActionableRecommendation:
         # What config change to make if approved
         self.config_key = config_key
         self.config_value = config_value
-        # "config_change", "remove_pair", "pause_trading"
+        # Action types: "config_change", "runtime_config_change", "remove_pair",
+        # "disable_direction", "enable_direction", "pause_trading"
         self.action_type = action_type
 
 
 class IntegrityMonitor:
     """
-    Proactive profit integrity and contingency checker.
+    Automated trading remediation system.
 
-    Catches problems like the breakeven bug (56 trades at £0 P&L)
-    before they compound over days. Sends Telegram alerts on EVERY scan
-    so you always know what's happening.
+    Detects problems (losing streaks, direction failures, weekly P&L decline),
+    diagnoses root causes, and presents targeted fixes via Telegram inline buttons.
+    Changes apply immediately at runtime — no restart needed.
     """
 
     def __init__(self, notifier=None):
         self.storage = TradeStorage()
         self.notifier = notifier
-        # Store pending recommendations so /action and /discuss can reference them
+        # Store pending recommendations so approve/reject can reference them
         self.pending_actions: list[ActionableRecommendation] = []
         # Counter for unique action IDs across the session
         self._next_action_id = 1
@@ -208,12 +217,219 @@ class IntegrityMonitor:
         msg += f"\n_{now.strftime('%H:%M UTC')}_"
         self.notifier._send_system(msg)
 
+    # ── Smart Losing Streak Analysis ──────────────────────────────────────────
+    # Replaces simple "5 losses → pause" with root-cause diagnosis
+
+    def _analyse_losing_streak(self, losses: list[dict]) -> list[ActionableRecommendation]:
+        """Diagnose WHY a losing streak is happening and recommend targeted fixes.
+
+        Instead of blindly pausing, looks at the pattern:
+        - >70% one direction → disable that direction
+        - >60% one pair → remove that pair
+        - Low avg confidence → raise min confidence
+        - >60% stopped out → widen SL ATR multiplier
+        - >60% EOD closed → lower overnight threshold
+        """
+        actions = []
+        if len(losses) < config.LOSING_STREAK_SMART_ANALYSIS_MIN:
+            return actions
+
+        total = len(losses)
+
+        # ── Direction analysis: are losses concentrated in BUY or SELL?
+        buy_losses = [t for t in losses if t.get("direction") == "BUY"]
+        sell_losses = [t for t in losses if t.get("direction") == "SELL"]
+
+        if len(buy_losses) / total > 0.70:
+            actions.append(ActionableRecommendation(
+                action_id=self._next_id(),
+                title="Disable BUY trades",
+                detail=(
+                    f"{len(buy_losses)}/{total} recent losses are BUY trades ({len(buy_losses)/total*100:.0f}%). "
+                    f"Disabling BUY prevents further losses while you investigate the root cause."
+                ),
+                config_key="BUY",
+                action_type="disable_direction",
+            ))
+        elif len(sell_losses) / total > 0.70:
+            actions.append(ActionableRecommendation(
+                action_id=self._next_id(),
+                title="Disable SELL trades",
+                detail=(
+                    f"{len(sell_losses)}/{total} recent losses are SELL trades ({len(sell_losses)/total*100:.0f}%). "
+                    f"Disabling SELL prevents further losses while you investigate the root cause."
+                ),
+                config_key="SELL",
+                action_type="disable_direction",
+            ))
+
+        # ── Pair analysis: are losses concentrated in one pair?
+        pair_counts = {}
+        for t in losses:
+            pair = t.get("pair", "Unknown")
+            pair_counts[pair] = pair_counts.get(pair, 0) + 1
+
+        for pair, count in pair_counts.items():
+            if count / total > 0.60 and count >= 3:
+                actions.append(ActionableRecommendation(
+                    action_id=self._next_id(),
+                    title=f"Remove {pair.replace('_', '/')} from pairs list",
+                    detail=(
+                        f"{count}/{total} losses are on {pair.replace('_', '/')} ({count/total*100:.0f}%). "
+                        f"Removing it stops the bleeding while market conditions are unfavourable."
+                    ),
+                    config_key="pairs",
+                    config_value=pair,
+                    action_type="remove_pair",
+                ))
+
+        # ── Confidence analysis: are we trading on weak signals?
+        confidences = [t.get("confidence_score", 0) for t in losses if t.get("confidence_score")]
+        if confidences:
+            avg_conf = sum(confidences) / len(confidences)
+            if avg_conf < config.MIN_CONFIDENCE_SCORE + 10:
+                new_conf = min(config.MIN_CONFIDENCE_SCORE + 10, 80)
+                actions.append(ActionableRecommendation(
+                    action_id=self._next_id(),
+                    title=f"Raise min confidence to {new_conf}%",
+                    detail=(
+                        f"Average confidence on losing trades: {avg_conf:.0f}%. "
+                        f"Raising from {config.MIN_CONFIDENCE_SCORE}% to {new_conf}% "
+                        f"filters out weaker signals."
+                    ),
+                    config_key="min_to_trade",
+                    config_value=new_conf,
+                    action_type="runtime_config_change",
+                ))
+
+        # ── Stop-loss analysis: are most losses from stops being hit?
+        stopped = [t for t in losses if "stop" in (t.get("close_reason") or "").lower()]
+        if len(stopped) / total > 0.60:
+            new_sl = config.STOP_LOSS_ATR_MULTIPLIER + 0.5
+            actions.append(ActionableRecommendation(
+                action_id=self._next_id(),
+                title=f"Widen stop-loss to {new_sl}x ATR",
+                detail=(
+                    f"{len(stopped)}/{total} losses hit stop-loss ({len(stopped)/total*100:.0f}%). "
+                    f"Widening from {config.STOP_LOSS_ATR_MULTIPLIER}x to {new_sl}x ATR "
+                    f"gives trades more room to develop."
+                ),
+                config_key="stop_loss_atr_multiplier",
+                config_value=new_sl,
+                action_type="runtime_config_change",
+            ))
+
+        # ── EOD analysis: are most losses from end-of-day closures?
+        eod_closed = [t for t in losses if "eod" in (t.get("close_reason") or "").lower()
+                      or "end of day" in (t.get("close_reason") or "").lower()
+                      or "force close" in (t.get("close_reason") or "").lower()]
+        if len(eod_closed) / total > 0.60:
+            new_threshold = max(config.HOLD_OVERNIGHT_THRESHOLD - 15, 60)
+            actions.append(ActionableRecommendation(
+                action_id=self._next_id(),
+                title=f"Lower overnight threshold to {new_threshold}%",
+                detail=(
+                    f"{len(eod_closed)}/{total} losses were EOD forced closures ({len(eod_closed)/total*100:.0f}%). "
+                    f"Lowering overnight hold threshold from {config.HOLD_OVERNIGHT_THRESHOLD}% to "
+                    f"{new_threshold}% lets profitable trades survive overnight."
+                ),
+                config_key="hold_overnight_threshold",
+                config_value=new_threshold,
+                action_type="runtime_config_change",
+            ))
+
+        return actions
+
+    # ── Direction Performance Alert ───────────────────────────────────────────
+
+    def _check_direction_performance(self, trades_7d: list[dict]) -> tuple[list[str], list[ActionableRecommendation]]:
+        """Check if BUY or SELL has a dangerously low win rate over 7 days.
+
+        If either direction has <30% win rate with >=5 trades, recommend disabling it.
+        """
+        issues = []
+        actions = []
+
+        for direction in ("BUY", "SELL"):
+            dir_trades = [t for t in trades_7d if t.get("direction") == direction and t.get("closed_at")]
+            if len(dir_trades) < 5:
+                continue
+
+            wins = sum(1 for t in dir_trades if t.get("pl", 0) > 0.01)
+            win_rate = wins / len(dir_trades) * 100
+
+            if win_rate < config.DIRECTION_WINRATE_ALERT_THRESHOLD:
+                losses_count = len(dir_trades) - wins
+                issues.append(
+                    f"{direction} win rate: {win_rate:.0f}% ({wins}W/{losses_count}L in 7d)"
+                )
+                # Only recommend disabling if not already disabled
+                if direction not in config.DISABLED_DIRECTIONS:
+                    actions.append(ActionableRecommendation(
+                        action_id=self._next_id(),
+                        title=f"Disable {direction} trades",
+                        detail=(
+                            f"{direction} has {win_rate:.0f}% win rate over 7d ({wins}W/{losses_count}L). "
+                            f"Disabling prevents further losses while you investigate the root cause."
+                        ),
+                        config_key=direction,
+                        action_type="disable_direction",
+                    ))
+
+        return issues, actions
+
+    # ── Weekly P&L Auto-Pause ─────────────────────────────────────────────────
+
+    def _check_weekly_pl_autopause(self) -> bool:
+        """Auto-pause trading if weekly P&L exceeds the loss threshold.
+
+        This is the ONLY action that fires autonomously (no approval needed).
+        Returns True if trading was paused.
+        """
+        try:
+            week_trades = self.storage.get_trades_for_week()
+            closed = [t for t in week_trades if t.get("closed_at")]
+            if not closed:
+                return False
+
+            weekly_pl = sum(t.get("pl", 0) for t in closed)
+
+            if weekly_pl < config.AUTOPAUSE_WEEKLY_LOSS_THRESHOLD:
+                # Auto-pause immediately — no approval needed for capital protection
+                import bot.scheduler as scheduler
+                if not scheduler._trading_paused:
+                    scheduler._trading_paused = True
+                    logger.warning(
+                        f"AUTO-PAUSE: Weekly P&L £{weekly_pl:.2f} breached threshold "
+                        f"£{config.AUTOPAUSE_WEEKLY_LOSS_THRESHOLD}"
+                    )
+                    if self.notifier:
+                        msg = (
+                            f"*🚨 AUTO-PAUSE TRIGGERED*\n"
+                            f"═════════════════════\n"
+                            f"*Weekly P&L:* £{weekly_pl:.2f}\n"
+                            f"*Threshold:* £{config.AUTOPAUSE_WEEKLY_LOSS_THRESHOLD}\n"
+                            f"─────────────────────\n"
+                            f"Trading has been *automatically paused* to protect capital.\n"
+                            f"Open positions remain active (stops still protect them).\n\n"
+                            f"Use /resume when ready to restart trading.\n"
+                            f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+                        )
+                        self.notifier._send_system(msg)
+                    return True
+
+        except Exception as e:
+            logger.error(f"Weekly P&L auto-pause check failed: {e}")
+
+        return False
+
     # ── Hourly Review ─────────────────────────────────────────────────────────
 
     def hourly_review(self) -> dict:
         """
         Analyse rolling 24h of trades for red flags.
-        ALWAYS sends a Telegram report — healthy or not.
+        Uses smart analysis to diagnose root causes.
+        ALWAYS sends a Telegram report with inline buttons when actions exist.
         """
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
@@ -266,6 +482,7 @@ class IntegrityMonitor:
                 ),
                 config_key="trailing_stop_trail_atr",
                 config_value=config.TRAILING_STOP_TRAIL_ATR + 0.5,
+                action_type="runtime_config_change",
             ))
 
         # ── Check 2: Win Rate ────────────────────────────────────────────────
@@ -289,6 +506,7 @@ class IntegrityMonitor:
                 ),
                 config_key="min_to_trade",
                 config_value=new_confidence,
+                action_type="runtime_config_change",
             ))
 
         # ── Check 3: Net P&L Drift ────────────────────────────────────────────
@@ -344,44 +562,71 @@ class IntegrityMonitor:
                 ),
                 config_key="trailing_stop_activation_atr",
                 config_value=new_activation,
+                action_type="runtime_config_change",
             ))
 
-        # ── Check 5: Consecutive Losses ───────────────────────────────────────
+        # ── Check 5: Smart Losing Streak (replaces simple 5-loss → pause) ────
         sorted_trades = sorted(all_closed, key=lambda t: t.get("closed_at", ""))
         max_consecutive_losses = 0
         current_streak = 0
+        streak_trades = []
         for t in sorted_trades:
             if t.get("pl", 0) < -0.01:
                 current_streak += 1
+                streak_trades.append(t)
                 max_consecutive_losses = max(max_consecutive_losses, current_streak)
             else:
+                if current_streak >= config.LOSING_STREAK_SMART_ANALYSIS_MIN:
+                    # Analyse this completed streak
+                    streak_actions = self._analyse_losing_streak(streak_trades)
+                    actions.extend(streak_actions)
                 current_streak = 0
+                streak_trades = []
+
+        # Check if the streak is still ongoing at the end
+        if current_streak >= config.LOSING_STREAK_SMART_ANALYSIS_MIN:
+            streak_actions = self._analyse_losing_streak(streak_trades)
+            actions.extend(streak_actions)
 
         summary["max_consecutive_losses"] = max_consecutive_losses
 
-        if max_consecutive_losses >= 5:
+        if max_consecutive_losses >= config.LOSING_STREAK_SMART_ANALYSIS_MIN:
             issues.append(
                 f"LOSING STREAK: {max_consecutive_losses} consecutive losses"
             )
-            actions.append(ActionableRecommendation(
-                action_id=self._next_id(),
-                title="Pause trading",
-                detail=(
-                    f"{max_consecutive_losses} straight losses suggests market conditions "
-                    f"have shifted. Pausing prevents further drawdown while you review"
-                ),
-                action_type="pause_trading",
-            ))
 
-        # ── Check 6: Direction Bias ───────────────────────────────────────────
-        directions = [t.get("direction") for t in all_closed if t.get("direction")]
-        if len(directions) >= 5:
-            buy_pct = directions.count("BUY") / len(directions) * 100
-            if buy_pct > 90 or buy_pct < 10:
-                dominant = "BUY" if buy_pct > 90 else "SELL"
-                issues.append(
-                    f"DIRECTION BIAS: {buy_pct:.0f}% of trades are {dominant}"
-                )
+        # ── Check 6: Direction Performance (7d) ───────────────────────────────
+        try:
+            week_trades = self.storage.get_trades_for_week()
+            dir_issues, dir_actions = self._check_direction_performance(week_trades)
+            issues.extend(dir_issues)
+            # Only add direction actions if not already recommended by streak analysis
+            existing_dir_types = {a.config_key for a in actions if a.action_type == "disable_direction"}
+            for da in dir_actions:
+                if da.config_key not in existing_dir_types:
+                    actions.extend([da])
+        except Exception as e:
+            logger.debug(f"Direction performance check failed: {e}")
+
+        # ── Check 7: Weekly P&L Auto-Pause ────────────────────────────────────
+        self._check_weekly_pl_autopause()
+
+        # ── Check 8: Show disabled directions/pairs status ────────────────────
+        if config.DISABLED_DIRECTIONS:
+            dirs = ", ".join(sorted(config.DISABLED_DIRECTIONS))
+            issues.append(f"DISABLED DIRECTIONS: {dirs} (use /action to re-enable)")
+            for d in config.DISABLED_DIRECTIONS:
+                actions.append(ActionableRecommendation(
+                    action_id=self._next_id(),
+                    title=f"Re-enable {d} trades",
+                    detail=f"Remove {d} from disabled directions and resume trading in that direction.",
+                    config_key=d,
+                    action_type="enable_direction",
+                ))
+
+        if config.DISABLED_PAIRS:
+            pairs = ", ".join(p.replace("_", "/") for p in sorted(config.DISABLED_PAIRS))
+            issues.append(f"DISABLED PAIRS: {pairs}")
 
         # Build summary
         summary["win_rate"] = round(win_rate, 1)
@@ -391,10 +636,10 @@ class IntegrityMonitor:
         summary["actions"] = actions
         summary["status"] = "WARNING" if issues else "HEALTHY"
 
-        # Store pending actions for /action and /discuss commands
+        # Store pending actions for approve/reject
         self.pending_actions = actions
 
-        # ALWAYS send — this is the key change
+        # ALWAYS send — with inline buttons when actions exist
         self._send_hourly_report(summary, issues, actions)
 
         return summary
@@ -404,7 +649,7 @@ class IntegrityMonitor:
     def deep_review(self) -> dict:
         """
         Comprehensive profitability and strategy effectiveness analysis.
-        ALWAYS sends a full report with per-pair breakdown and recommendations.
+        ALWAYS sends a full report with per-pair breakdown and inline buttons.
         """
         now = datetime.now(timezone.utc)
         summary = {
@@ -507,6 +752,7 @@ class IntegrityMonitor:
                     ),
                     config_key="take_profit_ratio",
                     config_value=new_tp,
+                    action_type="runtime_config_change",
                 ))
 
         # ── Overall Assessment ────────────────────────────────────────────────
@@ -532,11 +778,11 @@ class IntegrityMonitor:
                     ),
                     config_key="min_to_trade",
                     config_value=new_conf,
+                    action_type="runtime_config_change",
                 ))
 
         # If everything is healthy, recommend maintaining course
         if not issues:
-            # Check if there's room to be more aggressive
             if overall_win_rate > 60 and total_pl > 0:
                 actions.append(ActionableRecommendation(
                     action_id=self._next_id(),
@@ -549,6 +795,7 @@ class IntegrityMonitor:
                     ),
                     config_key="min_to_trade",
                     config_value=max(config.MIN_CONFIDENCE_SCORE - 5, 40),
+                    action_type="runtime_config_change",
                 ))
 
         summary["recommendations"] = actions
@@ -558,16 +805,321 @@ class IntegrityMonitor:
         # Store pending actions
         self.pending_actions.extend(actions)
 
-        # ALWAYS send the deep report
+        # ALWAYS send the deep report with inline buttons
         self._send_deep_report(summary, issues, actions, closed_week)
 
         return summary
+
+    # ── Weekly Strategy Review (Monday 00:15 UTC) ─────────────────────────────
+
+    def weekly_strategy_review(self):
+        """Compare this week vs last week and flag deterioration.
+
+        Runs Monday 00:15 UTC. Sends a Telegram report with comparison table
+        and defensive recommendations if P&L declined >20%.
+        """
+        now = datetime.now(timezone.utc)
+        issues = []
+        actions = []
+
+        try:
+            # This week's trades (Mon-Sun just ended)
+            this_week = self.storage.get_trades_for_week()
+            this_closed = [t for t in this_week if t.get("closed_at")]
+
+            # Last week's trades — get trades from 7-14 days ago
+            last_week_start = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+            last_week_end = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+            last_week = self.storage.get_trades_for_date_range(last_week_start, last_week_end)
+            last_closed = [t for t in last_week if t.get("closed_at")]
+
+            # This week stats
+            tw_pl = sum(t.get("pl", 0) for t in this_closed)
+            tw_trades = len(this_closed)
+            tw_wins = sum(1 for t in this_closed if t.get("pl", 0) > 0.01)
+            tw_wr = tw_wins / tw_trades * 100 if tw_trades > 0 else 0
+
+            # Last week stats
+            lw_pl = sum(t.get("pl", 0) for t in last_closed)
+            lw_trades = len(last_closed)
+            lw_wins = sum(1 for t in last_closed if t.get("pl", 0) > 0.01)
+            lw_wr = lw_wins / lw_trades * 100 if lw_trades > 0 else 0
+
+            # Per-pair comparison
+            tw_pair_pl = {}
+            for t in this_closed:
+                pair = t.get("pair", "?")
+                tw_pair_pl[pair] = tw_pair_pl.get(pair, 0) + t.get("pl", 0)
+
+            lw_pair_pl = {}
+            for t in last_closed:
+                pair = t.get("pair", "?")
+                lw_pair_pl[pair] = lw_pair_pl.get(pair, 0) + t.get("pl", 0)
+
+            # Flag pairs that flipped from profitable to unprofitable
+            flipped_pairs = []
+            for pair in set(list(tw_pair_pl.keys()) + list(lw_pair_pl.keys())):
+                lw_p = lw_pair_pl.get(pair, 0)
+                tw_p = tw_pair_pl.get(pair, 0)
+                if lw_p > 0 and tw_p < -2:  # Was profitable, now losing > £2
+                    flipped_pairs.append(pair)
+
+            if flipped_pairs:
+                for pair in flipped_pairs:
+                    issues.append(
+                        f"FLIPPED: {pair.replace('_', '/')} was profitable last week, "
+                        f"now £{tw_pair_pl[pair]:.2f}"
+                    )
+                    actions.append(ActionableRecommendation(
+                        action_id=self._next_id(),
+                        title=f"Remove {pair.replace('_', '/')} from pairs list",
+                        detail=(
+                            f"{pair.replace('_', '/')} flipped from +£{lw_pair_pl.get(pair, 0):.2f} last week "
+                            f"to £{tw_pair_pl[pair]:.2f} this week. Consider removing until conditions improve."
+                        ),
+                        config_key="pairs",
+                        config_value=pair,
+                        action_type="remove_pair",
+                    ))
+
+            # If P&L declined >20%, recommend defensive adjustments
+            if lw_pl > 0 and tw_pl < lw_pl * 0.8:
+                pl_decline = ((tw_pl - lw_pl) / abs(lw_pl)) * 100 if lw_pl != 0 else 0
+                issues.append(f"P&L DECLINE: {pl_decline:.0f}% week-over-week")
+                new_conf = min(config.MIN_CONFIDENCE_SCORE + 5, 80)
+                actions.append(ActionableRecommendation(
+                    action_id=self._next_id(),
+                    title=f"Raise min confidence to {new_conf}% (defensive)",
+                    detail=(
+                        f"P&L dropped {pl_decline:.0f}% week-over-week "
+                        f"(£{lw_pl:.2f} → £{tw_pl:.2f}). "
+                        f"Tightening confidence filter reduces exposure during unfavourable conditions."
+                    ),
+                    config_key="min_to_trade",
+                    config_value=new_conf,
+                    action_type="runtime_config_change",
+                ))
+            elif lw_pl <= 0 and tw_pl < lw_pl - 5:
+                issues.append(f"LOSSES DEEPENING: £{lw_pl:.2f} last week → £{tw_pl:.2f} this week")
+
+            # Build message
+            tw_pl_sign = "+" if tw_pl >= 0 else ""
+            lw_pl_sign = "+" if lw_pl >= 0 else ""
+
+            msg = (
+                f"*📊 WEEKLY STRATEGY REVIEW*\n"
+                f"═════════════════════\n"
+                f"*This Week:*\n"
+                f"  Trades: {tw_trades} | Win rate: {tw_wr:.0f}% | P&L: *{tw_pl_sign}£{tw_pl:.2f}*\n"
+                f"*Last Week:*\n"
+                f"  Trades: {lw_trades} | Win rate: {lw_wr:.0f}% | P&L: *{lw_pl_sign}£{lw_pl:.2f}*\n"
+                f"─────────────────────\n"
+            )
+
+            # Per-pair table
+            all_pairs = sorted(set(list(tw_pair_pl.keys()) + list(lw_pair_pl.keys())))
+            if all_pairs:
+                msg += f"*Per-Pair Comparison:*\n"
+                for pair in all_pairs:
+                    tw_p = tw_pair_pl.get(pair, 0)
+                    lw_p = lw_pair_pl.get(pair, 0)
+                    emoji = "✅" if tw_p > lw_p else ("❌" if tw_p < lw_p else "➡️")
+                    pair_display = pair.replace("_", "/")
+                    msg += (
+                        f"  {emoji} {pair_display}: "
+                        f"{'+'if lw_p >= 0 else ''}£{lw_p:.2f} → "
+                        f"{'+'if tw_p >= 0 else ''}£{tw_p:.2f}\n"
+                    )
+                msg += "\n"
+
+            if issues:
+                msg += f"*⚠️ Issues ({len(issues)}):*\n"
+                for issue in issues:
+                    msg += f"  • {issue}\n"
+                msg += "\n"
+            else:
+                msg += f"✅ No significant deterioration detected\n\n"
+
+            # Recommendations with inline buttons
+            if actions:
+                msg += f"*💡 Recommendations:*\n"
+                for a in actions:
+                    msg += (
+                        f"\n*#{a.action_id}* — {a.title}\n"
+                        f"  _{a.detail}_\n"
+                    )
+
+            msg += f"\n_{now.strftime('%H:%M UTC')}_"
+
+            self.pending_actions.extend(actions)
+
+            if actions and self.notifier:
+                self.notifier.send_action_buttons(msg, actions)
+            else:
+                self._send_split(msg)
+
+            logger.info(f"Weekly strategy review sent: {len(issues)} issues, {len(actions)} actions")
+
+        except Exception as e:
+            logger.error(f"Weekly strategy review failed: {e}")
+
+    # ── Daily LSTM Health Summary (08:00 UTC) ─────────────────────────────────
+
+    def daily_lstm_health(self):
+        """Check LSTM model health and recommend shadow mode toggle if needed.
+
+        Runs daily at 08:00 UTC. Checks:
+        - Model file age (last retrain timestamp)
+        - Prediction accuracy (24h/7d)
+        - LSTM edge (confidence delta vs indicator-only)
+        - Recommends shadow mode toggle based on accuracy
+        """
+        now = datetime.now(timezone.utc)
+        actions = []
+
+        try:
+            # ── Model file age
+            model_path = config.DATA_DIR / "models" / "lstm_v1.pt"
+            model_age_str = "Unknown"
+            model_age_hours = None
+            if model_path.exists():
+                import os
+                mtime = datetime.fromtimestamp(os.path.getmtime(model_path), tz=timezone.utc)
+                model_age_hours = (now - mtime).total_seconds() / 3600
+                if model_age_hours < 24:
+                    model_age_str = f"{model_age_hours:.1f}h ago"
+                else:
+                    model_age_str = f"{model_age_hours / 24:.1f}d ago"
+            else:
+                model_age_str = "No model file found"
+
+            # ── Prediction accuracy from DB
+            acc_24h = None
+            acc_7d = None
+            total_24h = 0
+            total_7d = 0
+            lstm_edge = None
+
+            try:
+                from data.storage import DB_PATH
+                import sqlite3
+                conn = sqlite3.connect(str(DB_PATH), timeout=10)
+                conn.row_factory = sqlite3.Row
+
+                # 24h accuracy
+                cutoff_24h = (now - timedelta(hours=24)).isoformat()
+                rows_24h = conn.execute(
+                    "SELECT outcome FROM predictions WHERE timestamp > ? AND outcome IS NOT NULL",
+                    (cutoff_24h,)
+                ).fetchall()
+                total_24h = len(rows_24h)
+                if total_24h > 0:
+                    correct_24h = sum(1 for r in rows_24h if r["outcome"] == "correct")
+                    acc_24h = correct_24h / total_24h * 100
+
+                # 7d accuracy
+                cutoff_7d = (now - timedelta(days=7)).isoformat()
+                rows_7d = conn.execute(
+                    "SELECT outcome FROM predictions WHERE timestamp > ? AND outcome IS NOT NULL",
+                    (cutoff_7d,)
+                ).fetchall()
+                total_7d = len(rows_7d)
+                if total_7d > 0:
+                    correct_7d = sum(1 for r in rows_7d if r["outcome"] == "correct")
+                    acc_7d = correct_7d / total_7d * 100
+
+                # LSTM edge: average (lstm_score - indicator_score) for recent predictions
+                edge_rows = conn.execute(
+                    "SELECT confidence_score, indicator_only_score FROM predictions "
+                    "WHERE timestamp > ? AND indicator_only_score IS NOT NULL",
+                    (cutoff_7d,)
+                ).fetchall()
+                if edge_rows:
+                    edges = [r["confidence_score"] - r["indicator_only_score"] for r in edge_rows
+                             if r["confidence_score"] is not None and r["indicator_only_score"] is not None]
+                    if edges:
+                        lstm_edge = sum(edges) / len(edges)
+
+                conn.close()
+            except Exception as e:
+                logger.debug(f"LSTM health DB query failed: {e}")
+
+            # ── Recommendations based on accuracy
+            if acc_7d is not None and total_7d >= 10:
+                if acc_7d < 45 and not config.LSTM_SHADOW_MODE:
+                    # Accuracy poor — recommend shadow mode
+                    actions.append(ActionableRecommendation(
+                        action_id=self._next_id(),
+                        title="Enable LSTM shadow mode",
+                        detail=(
+                            f"7d accuracy is {acc_7d:.0f}% (below 45% threshold). "
+                            f"Shadow mode disables LSTM from influencing trade decisions "
+                            f"while it continues learning. Re-enable when accuracy improves."
+                        ),
+                        config_key="lstm_shadow_mode",
+                        config_value=True,
+                        action_type="runtime_config_change",
+                    ))
+                elif acc_7d > 55 and config.LSTM_SHADOW_MODE:
+                    # Accuracy good — recommend disabling shadow mode
+                    actions.append(ActionableRecommendation(
+                        action_id=self._next_id(),
+                        title="Disable LSTM shadow mode (go live)",
+                        detail=(
+                            f"7d accuracy is {acc_7d:.0f}% (above 55% threshold). "
+                            f"The LSTM is adding value — disabling shadow mode gives it "
+                            f"its full 50% weight in confidence scoring."
+                        ),
+                        config_key="lstm_shadow_mode",
+                        config_value=False,
+                        action_type="runtime_config_change",
+                    ))
+
+            # ── Build message
+            shadow_str = "ON (not influencing trades)" if config.LSTM_SHADOW_MODE else "OFF (live, 50% weight)"
+            acc_24h_str = f"{acc_24h:.0f}% ({total_24h} predictions)" if acc_24h is not None else "Insufficient data"
+            acc_7d_str = f"{acc_7d:.0f}% ({total_7d} predictions)" if acc_7d is not None else "Insufficient data"
+            edge_str = f"{lstm_edge:+.1f}pp" if lstm_edge is not None else "N/A"
+
+            msg = (
+                f"*🧠 DAILY LSTM HEALTH*\n"
+                f"═════════════════════\n"
+                f"*Last Retrain:* {model_age_str}\n"
+                f"*Shadow Mode:* {shadow_str}\n"
+                f"─────────────────────\n"
+                f"*Prediction Accuracy:*\n"
+                f"  24h: {acc_24h_str}\n"
+                f"  7d: {acc_7d_str}\n"
+                f"*LSTM Edge:* {edge_str}\n"
+            )
+
+            if model_age_hours and model_age_hours > 12:
+                msg += f"\n⚠️ Model is {model_age_str} old — check retrain schedule\n"
+
+            if actions:
+                msg += f"\n*💡 Recommendations:*\n"
+                for a in actions:
+                    msg += f"\n*#{a.action_id}* — {a.title}\n  _{a.detail}_\n"
+
+            msg += f"\n_{now.strftime('%H:%M UTC')}_"
+
+            self.pending_actions.extend(actions)
+
+            if actions and self.notifier:
+                self.notifier.send_action_buttons(msg, actions)
+            else:
+                self._send_split(msg)
+
+            logger.info(f"Daily LSTM health summary sent: accuracy_7d={acc_7d_str}, edge={edge_str}")
+
+        except Exception as e:
+            logger.error(f"Daily LSTM health check failed: {e}")
 
     # ── Alert Dispatch (always sends) ─────────────────────────────────────────
 
     def _send_hourly_report(self, summary: dict, issues: list[str],
                             actions: list[ActionableRecommendation]):
-        """Send the hourly integrity report. Always sends."""
+        """Send the hourly integrity report. Always sends, with inline buttons when actions exist."""
         if not self.notifier:
             return
 
@@ -612,29 +1164,31 @@ class IntegrityMonitor:
         else:
             msg += f"\n✅ No issues detected\n"
 
-        # Actionable recommendations with reply commands
+        # Actionable recommendations
         if actions:
             msg += f"\n*💡 Actions Available:*\n"
             for a in actions:
                 msg += (
                     f"\n*#{a.action_id}* — {a.title}\n"
                     f"  _{a.detail}_\n"
-                    f"  → `/action {a.action_id}` to apply\n"
-                    f"  → `/discuss {a.action_id}` to discuss\n"
                 )
         else:
             msg += f"\n✅ No changes recommended — current config is working\n"
 
         msg += f"\n_{now.strftime('%H:%M UTC')}_"
 
-        # Split long messages (Telegram 4096 char limit)
-        self._send_split(msg)
+        # Send with inline buttons if there are actions, otherwise plain
+        if actions:
+            self._send_split_with_buttons(msg, actions)
+        else:
+            self._send_split(msg)
+
         logger.info(f"Hourly integrity report sent: {status}, {len(issues)} issues, {len(actions)} actions")
 
     def _send_deep_report(self, summary: dict, issues: list[str],
                           actions: list[ActionableRecommendation],
                           trades: list):
-        """Send the deep integrity report. Always sends."""
+        """Send the deep integrity report. Always sends, with inline buttons when actions exist."""
         if not self.notifier:
             return
 
@@ -695,8 +1249,6 @@ class IntegrityMonitor:
                 msg += (
                     f"\n*#{a.action_id}* — {a.title}\n"
                     f"  _{a.detail}_\n"
-                    f"  → `/action {a.action_id}` to apply\n"
-                    f"  → `/discuss {a.action_id}` to discuss\n"
                 )
         else:
             msg += f"*✅ No changes recommended*\n"
@@ -705,7 +1257,12 @@ class IntegrityMonitor:
         msg += f"\n_Use /integrity for a full on-demand report_"
         msg += f"\n_{now.strftime('%H:%M UTC')}_"
 
-        self._send_split(msg)
+        # Send with inline buttons if there are actions
+        if actions:
+            self._send_split_with_buttons(msg, actions)
+        else:
+            self._send_split(msg)
+
         logger.info(f"Deep integrity report sent: {status}, {len(issues)} issues, {len(actions)} actions")
 
     def _send_split(self, message: str):
@@ -713,13 +1270,11 @@ class IntegrityMonitor:
         if len(message) <= 4000:
             self.notifier._send_system(message)
         else:
-            # Split at a newline near the limit
             chunks = []
             while message:
                 if len(message) <= 4000:
                     chunks.append(message)
                     break
-                # Find last newline before limit
                 split_at = message.rfind("\n", 0, 4000)
                 if split_at == -1:
                     split_at = 4000
@@ -729,6 +1284,33 @@ class IntegrityMonitor:
             for chunk in chunks:
                 if chunk.strip():
                     self.notifier._send_system(chunk)
+
+    def _send_split_with_buttons(self, message: str, actions: list[ActionableRecommendation]):
+        """Send a message with inline buttons. If too long, split text and put buttons on last chunk."""
+        if len(message) <= 4000:
+            self.notifier.send_action_buttons(message, actions)
+        else:
+            # Split into chunks, put buttons on the last one
+            chunks = []
+            remaining = message
+            while remaining:
+                if len(remaining) <= 4000:
+                    chunks.append(remaining)
+                    break
+                split_at = remaining.rfind("\n", 0, 4000)
+                if split_at == -1:
+                    split_at = 4000
+                chunks.append(remaining[:split_at])
+                remaining = remaining[split_at:]
+
+            # Send all but last without buttons
+            for chunk in chunks[:-1]:
+                if chunk.strip():
+                    self.notifier._send_system(chunk)
+
+            # Last chunk gets the buttons
+            if chunks and chunks[-1].strip():
+                self.notifier.send_action_buttons(chunks[-1], actions)
 
     # ── Action Execution ──────────────────────────────────────────────────────
 
@@ -743,8 +1325,8 @@ class IntegrityMonitor:
         """
         Apply a recommended action and return a status message.
 
-        Config changes are written to config.yaml and take effect on restart.
-        Some actions (pause) can take effect immediately.
+        Supports runtime config changes (immediate effect, no restart),
+        direction enable/disable, pair removal, and trading pause.
         """
         action = self.get_action(action_id)
         if not action:
@@ -764,20 +1346,63 @@ class IntegrityMonitor:
                     f"Use /resume when ready to restart trading."
                 )
 
-            elif action.action_type == "remove_pair":
-                pair = action.config_value
+            elif action.action_type == "disable_direction":
+                # Add direction to disabled set — blocks all trades in that direction
+                direction = action.config_key
+                config.DISABLED_DIRECTIONS.add(direction)
+                logger.info(f"Direction DISABLED at runtime: {direction}")
                 result = (
-                    f"✅ *Action #{action_id} Noted*\n"
+                    f"✅ *Action #{action_id} Applied*\n"
                     f"─────────────────────\n"
                     f"*{action.title}*\n\n"
-                    f"To remove {pair.replace('_', '/')} from the pairs list:\n"
-                    f"Edit `config/config.yaml` → `trading.pairs` and remove `{pair}`\n"
-                    f"Then restart: `docker-compose down && docker-compose up -d`\n\n"
-                    f"_Config changes require a restart to take effect._"
+                    f"{direction} trades are now *disabled*.\n"
+                    f"The bot will skip all {direction} signals until re-enabled.\n"
+                    f"Existing {direction} positions are unaffected.\n"
+                    f"_This is a runtime change — no restart needed._"
+                )
+
+            elif action.action_type == "enable_direction":
+                # Remove direction from disabled set
+                direction = action.config_key
+                config.DISABLED_DIRECTIONS.discard(direction)
+                logger.info(f"Direction RE-ENABLED at runtime: {direction}")
+                result = (
+                    f"✅ *Action #{action_id} Applied*\n"
+                    f"─────────────────────\n"
+                    f"*{action.title}*\n\n"
+                    f"{direction} trades are now *re-enabled*.\n"
+                    f"The bot will resume opening {direction} positions."
+                )
+
+            elif action.action_type == "remove_pair":
+                # Remove pair from config.PAIRS at runtime and add to DISABLED_PAIRS
+                pair = action.config_value
+                if pair in config.PAIRS:
+                    config.PAIRS.remove(pair)
+                config.DISABLED_PAIRS.add(pair)
+                logger.info(f"Pair REMOVED at runtime: {pair}")
+                result = (
+                    f"✅ *Action #{action_id} Applied*\n"
+                    f"─────────────────────\n"
+                    f"*{action.title}*\n\n"
+                    f"{pair.replace('_', '/')} has been *removed* from the pairs list.\n"
+                    f"The bot will stop scanning this pair immediately.\n"
+                    f"_This is a runtime change — no restart needed._"
+                )
+
+            elif action.action_type == "runtime_config_change":
+                # Apply config change at runtime AND persist to YAML
+                change_desc = config.apply_runtime_config(action.config_key, action.config_value)
+                result = (
+                    f"✅ *Action #{action_id} Applied*\n"
+                    f"─────────────────────\n"
+                    f"*{action.title}*\n\n"
+                    f"Changed: `{change_desc}`\n"
+                    f"_Effective immediately — also persisted to config.yaml._"
                 )
 
             elif action.action_type == "config_change":
-                # Write the config change to config.yaml
+                # Legacy: write to YAML only (requires restart)
                 self._apply_config_change(action.config_key, action.config_value)
                 result = (
                     f"✅ *Action #{action_id} Applied*\n"
@@ -815,39 +1440,59 @@ class IntegrityMonitor:
             msg += f"*Config key:* `{action.config_key}`\n"
             msg += f"*New value:* `{action.config_value}`\n\n"
 
-        if action.action_type == "config_change":
-            msg += (
-                f"*Impact:*\n"
-                f"This changes a trading parameter in config.yaml. "
-                f"The change takes effect after a restart.\n\n"
-                f"*To apply:* `/action {action_id}`\n"
-                f"*To skip:* Just ignore — it won't be applied\n"
-                f"*To ask more:* Reply with your question and I'll answer"
-            )
-        elif action.action_type == "pause_trading":
-            msg += (
-                f"*Impact:*\n"
-                f"Stops the bot from opening new trades immediately. "
-                f"Existing positions keep their stops active. "
-                f"Use /resume to restart.\n\n"
-                f"*To apply:* `/action {action_id}`\n"
-            )
-        elif action.action_type == "remove_pair":
-            msg += (
-                f"*Impact:*\n"
-                f"Removes this pair from the scanning list. The bot won't "
-                f"open new positions on this pair. Existing positions are unaffected.\n\n"
-                f"*To apply:* `/action {action_id}`\n"
-            )
+        type_descriptions = {
+            "runtime_config_change": (
+                "*Impact:*\n"
+                "This changes a trading parameter *immediately at runtime* — "
+                "no restart needed. The change is also persisted to config.yaml "
+                "so it survives restarts.\n\n"
+                f"*To apply:* `/action {action_id}` or tap ✅ Approve\n"
+            ),
+            "config_change": (
+                "*Impact:*\n"
+                "This changes a trading parameter in config.yaml. "
+                "The change takes effect after a restart.\n\n"
+                f"*To apply:* `/action {action_id}` or tap ✅ Approve\n"
+            ),
+            "pause_trading": (
+                "*Impact:*\n"
+                "Stops the bot from opening new trades immediately. "
+                "Existing positions keep their stops active. "
+                "Use /resume to restart.\n\n"
+                f"*To apply:* `/action {action_id}` or tap ✅ Approve\n"
+            ),
+            "remove_pair": (
+                "*Impact:*\n"
+                "Removes this pair from the scanning list *immediately*. "
+                "The bot won't open new positions on this pair. "
+                "Existing positions are unaffected. No restart needed.\n\n"
+                f"*To apply:* `/action {action_id}` or tap ✅ Approve\n"
+            ),
+            "disable_direction": (
+                "*Impact:*\n"
+                "Blocks all trades in this direction *immediately*. "
+                "The bot will skip these signals until re-enabled. "
+                "Existing positions are unaffected. No restart needed.\n\n"
+                f"*To apply:* `/action {action_id}` or tap ✅ Approve\n"
+            ),
+            "enable_direction": (
+                "*Impact:*\n"
+                "Re-enables trading in this direction *immediately*. "
+                "The bot will resume opening positions in this direction.\n\n"
+                f"*To apply:* `/action {action_id}` or tap ✅ Approve\n"
+            ),
+        }
+
+        msg += type_descriptions.get(action.action_type, f"*To apply:* `/action {action_id}`\n")
+        msg += f"*To skip:* Just ignore or tap ❌ Reject — it won't be applied"
 
         return msg
 
     def _apply_config_change(self, key: str, value):
         """
-        Write a config change to config.yaml.
+        Write a config change to config.yaml (legacy — requires restart).
 
-        Maps config keys to their YAML path and updates the file.
-        Changes take effect on restart.
+        For runtime changes, use config.apply_runtime_config() instead.
         """
         import yaml
 
@@ -856,7 +1501,6 @@ class IntegrityMonitor:
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
 
-        # Map flat config keys to their YAML path
         key_map = {
             "trailing_stop_trail_atr": ("risk", "trailing_stop_trail_atr"),
             "trailing_stop_activation_atr": ("risk", "trailing_stop_activation_atr"),
@@ -910,6 +1554,14 @@ class IntegrityMonitor:
             f"  Hourly: {status_emoji.get(hourly_status, '❓')} {hourly_status}\n"
             f"  Deep: {status_emoji.get(deep_status, '❓')} {deep_status}\n\n"
         )
+
+        # Disabled directions/pairs status
+        if config.DISABLED_DIRECTIONS:
+            msg += f"*🚫 Disabled Directions:* {', '.join(sorted(config.DISABLED_DIRECTIONS))}\n"
+        if config.DISABLED_PAIRS:
+            msg += f"*🚫 Disabled Pairs:* {', '.join(p.replace('_', '/') for p in sorted(config.DISABLED_PAIRS))}\n"
+        if config.DISABLED_DIRECTIONS or config.DISABLED_PAIRS:
+            msg += "\n"
 
         # All issues
         all_issues = hourly.get("issues", []) + deep.get("issues", [])

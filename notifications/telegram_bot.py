@@ -16,7 +16,7 @@ on your phone at a glance.
 """
 
 import asyncio
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from loguru import logger
 from datetime import datetime, timezone
@@ -42,15 +42,15 @@ class TelegramNotifier:
         # Timestamp of last send — used to rate-limit and avoid pool exhaustion
         self._last_send_time = 0.0
 
-    def _send(self, message: str):
+    def _send(self, message: str, reply_markup=None):
         """Send a TRADING message via the trading bot."""
-        self._do_send(message, self.token)
+        self._do_send(message, self.token, reply_markup=reply_markup)
 
-    def _send_system(self, message: str):
+    def _send_system(self, message: str, reply_markup=None):
         """Send a SYSTEM/OPS message via the system bot."""
-        self._do_send(message, self.sys_token)
+        self._do_send(message, self.sys_token, reply_markup=reply_markup)
 
-    def _do_send(self, message: str, token: str):
+    def _do_send(self, message: str, token: str, reply_markup=None):
         """Send a message using the specified bot token.
         Creates a fresh Bot + event loop per call so the httpx connection pool
         is properly scoped and cleaned up. Rate-limited to 1 message/second
@@ -72,7 +72,8 @@ class TelegramNotifier:
                         bot.send_message(
                             chat_id=self.chat_id,
                             text=message,
-                            parse_mode=ParseMode.MARKDOWN
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_markup=reply_markup
                         )
                     )
                 except Exception:
@@ -81,7 +82,8 @@ class TelegramNotifier:
                     loop.run_until_complete(
                         bot.send_message(
                             chat_id=self.chat_id,
-                            text=message
+                            text=message,
+                            reply_markup=reply_markup
                         )
                     )
             finally:
@@ -90,6 +92,35 @@ class TelegramNotifier:
             logger.debug(f"Telegram message sent: {message[:60]}...")
         except Exception as e:
             logger.error(f"Failed to send Telegram message: {e}")
+
+    def send_action_buttons(self, message: str, actions: list):
+        """Send a system message with inline approve/reject buttons for each action.
+
+        Each action should have .action_id and .title attributes.
+        Buttons use callback data format: action_approve:{id} / action_reject:{id}
+        """
+        if not actions:
+            # No actions — send plain message
+            self._send_system(message)
+            return
+
+        # Build rows of [Approve] [Reject] buttons, one row per action
+        keyboard = []
+        for action in actions:
+            row = [
+                InlineKeyboardButton(
+                    f"✅ Approve #{action.action_id}",
+                    callback_data=f"action_approve:{action.action_id}"
+                ),
+                InlineKeyboardButton(
+                    f"❌ Reject #{action.action_id}",
+                    callback_data=f"action_reject:{action.action_id}"
+                ),
+            ]
+            keyboard.append(row)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        self._send_system(message, reply_markup=reply_markup)
 
     # ── Trade Notifications ───────────────────────────────────────────────────
 

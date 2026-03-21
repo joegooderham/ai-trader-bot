@@ -76,7 +76,9 @@ def calculate_confidence(
     bullish_signals = 0
     bearish_signals = 0
 
-    # RSI analysis
+    # RSI analysis — symmetric thresholds for BUY and SELL signals.
+    # Previously SELL was disadvantaged: needed RSI > 70 (rare) while BUY
+    # triggered at RSI < 30. Now the mild zones are symmetric too.
     if indicators.rsi < 30:
         bullish_signals += 2    # Strongly oversold — good time to buy
         reasoning_parts.append(f"RSI {indicators.rsi:.1f} is oversold (below 30) — price may bounce up")
@@ -84,9 +86,9 @@ def calculate_confidence(
         bearish_signals += 2    # Strongly overbought — good time to sell
         reasoning_parts.append(f"RSI {indicators.rsi:.1f} is overbought (above 70) — price may fall")
     elif indicators.rsi < 45:
-        bearish_signals += 1
+        bullish_signals += 1    # Mildly oversold — slight bullish lean
     elif indicators.rsi > 55:
-        bullish_signals += 1
+        bearish_signals += 1    # Mildly overbought — slight bearish lean
 
     # MACD analysis
     if "bullish" in indicators.macd_signal:
@@ -156,17 +158,21 @@ def calculate_confidence(
 
     breakdown["lstm_model"] = round(ml_score * weights["lstm_model"] / 100, 2)
 
-    # MACD + RSI consensus (20% weight)
+    # MACD + RSI consensus (20% weight) — symmetric thresholds for BUY/SELL.
+    # Previously SELL needed RSI > 45 for 100pts (almost always true, too easy)
+    # while BUY needed RSI < 55 (also easy). Now both use the same logic:
+    # Full score (100) when MACD agrees AND RSI is in the confirming zone,
+    # partial score (60) when either condition is met alone.
     macd_rsi_score = 0
     if direction == "BUY":
-        if "bullish" in indicators.macd_signal and indicators.rsi < 55:
-            macd_rsi_score = 100
-        elif "bullish" in indicators.macd_signal or indicators.rsi < 45:
+        if "bullish" in indicators.macd_signal and indicators.rsi < 50:
+            macd_rsi_score = 100  # MACD bullish + RSI below midline = strong BUY
+        elif "bullish" in indicators.macd_signal or indicators.rsi < 40:
             macd_rsi_score = 60
     else:  # SELL
-        if "bearish" in indicators.macd_signal and indicators.rsi > 45:
-            macd_rsi_score = 100
-        elif "bearish" in indicators.macd_signal or indicators.rsi > 55:
+        if "bearish" in indicators.macd_signal and indicators.rsi > 50:
+            macd_rsi_score = 100  # MACD bearish + RSI above midline = strong SELL
+        elif "bearish" in indicators.macd_signal or indicators.rsi > 60:
             macd_rsi_score = 60
 
     breakdown["macd_rsi"] = round(macd_rsi_score * weights["macd_rsi_consensus"] / 100, 2)

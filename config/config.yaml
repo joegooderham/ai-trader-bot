@@ -109,11 +109,11 @@ confidence:
 
   # Minimum score (0-100) to open a trade
   # Below this, the bot does nothing — better to miss a trade than lose money
-  min_to_trade: 50
+  min_to_trade: 60
 
   # Score required to hold a position past end-of-day close
   # This is intentionally very high — overnight holds should be rare
-  hold_overnight_threshold: 98
+  hold_overnight_threshold: 65
 
   # Weighting of each component in the final confidence score
   # All weights must add up to 100

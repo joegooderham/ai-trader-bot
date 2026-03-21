@@ -348,7 +348,7 @@ def _evaluate_pair(pair: str, available_capital: float):
             f"Delta: {diff_str}pp | LSTM pred: {ml_prediction}"
         )
 
-        # Log prediction to SQLite for accuracy tracking (Phase 2)
+        # Log prediction to SQLite for accuracy tracking
         try:
             storage.save_prediction({
                 "pair": pair,
@@ -357,7 +357,8 @@ def _evaluate_pair(pair: str, available_capital: float):
                 "predicted_probability": ml_prediction["probability"],
                 "confidence_score": lstm_result.score,
                 "indicator_only_score": indicator_result.score,
-                "model_version": None,
+                "model_version": getattr(lstm_predictor, 'model_version', None),
+                "confidence_breakdown": lstm_result.breakdown,
             })
         except Exception as e:
             logger.debug(f"Failed to save prediction: {e}")
@@ -371,7 +372,7 @@ def _evaluate_pair(pair: str, available_capital: float):
             ml_prediction=ml_prediction, mtf_context=mtf_context
         )
 
-        # Log LSTM prediction when not in shadow mode (Phase 2)
+        # Log LSTM prediction when not in shadow mode
         if ml_prediction:
             try:
                 storage.save_prediction({
@@ -381,7 +382,8 @@ def _evaluate_pair(pair: str, available_capital: float):
                     "predicted_probability": ml_prediction["probability"],
                     "confidence_score": result.score,
                     "indicator_only_score": None,
-                    "model_version": None,
+                    "model_version": getattr(lstm_predictor, 'model_version', None),
+                    "confidence_breakdown": result.breakdown,
                 })
             except Exception as e:
                 logger.debug(f"Failed to save prediction: {e}")

@@ -63,9 +63,14 @@ GITHUB_REPO = os.getenv("GITHUB_REPO", "joegooderham/ai-trader-bot")
 
 # ── Capital & Risk ────────────────────────────────────────────────────────────
 
+# Capital from env var (set in GitHub Secrets)
 MAX_CAPITAL               = float(os.getenv("MAX_CAPITAL", 500))
-MIN_CONFIDENCE_SCORE      = float(os.getenv("MIN_CONFIDENCE_SCORE", 60))
-HOLD_OVERNIGHT_THRESHOLD  = float(os.getenv("HOLD_OVERNIGHT_THRESHOLD", 98))
+
+# Confidence and overnight thresholds — read from config.yaml as the single source of truth.
+# Previously these read from env vars with hardcoded defaults, which meant YAML changes
+# (like setting min_to_trade to 85%) were silently ignored at startup.
+MIN_CONFIDENCE_SCORE      = float(_cfg["confidence"]["min_to_trade"])
+HOLD_OVERNIGHT_THRESHOLD  = float(_cfg["confidence"]["hold_overnight_threshold"])
 
 # ── Trading Parameters (from config.yaml) ────────────────────────────────────
 

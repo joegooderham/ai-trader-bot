@@ -27,5 +27,7 @@ jobs:
           GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
           GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+          FRED_API_TOKEN: ${{ secrets.FRED_API_TOKEN }}
+          DASHBOARD_CMD_TOKEN: ${{ secrets.DASHBOARD_CMD_TOKEN }}
         run: |
           docker-compose up -d --build

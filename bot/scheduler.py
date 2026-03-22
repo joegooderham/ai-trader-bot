@@ -317,6 +317,7 @@ def _evaluate_pair(pair: str, available_capital: float):
 
     # BACKLOG-004: Fetch higher-timeframe candles for trend confirmation
     mtf_context = None
+    htf_candles = None
     if config.HTF_TIMEFRAME and config.HTF_TIMEFRAME != "none":
         try:
             htf_candles = broker.get_candles(
@@ -329,9 +330,15 @@ def _evaluate_pair(pair: str, available_capital: float):
             logger.debug(f"HTF fetch failed for {pair}: {e}")
 
     # Get LSTM prediction if model is loaded and enabled
+    # Pass MCP context and HTF candles so the LSTM can use enhanced features
+    # (sentiment, COT, FRED, volatility, HTF trend) alongside technicals
     ml_prediction = None
     if lstm_predictor:
-        ml_prediction = lstm_predictor.predict(pair, candles)
+        ml_prediction = lstm_predictor.predict(
+            pair, candles,
+            mcp_context=mcp_context,
+            htf_df=htf_candles
+        )
 
     if config.LSTM_SHADOW_MODE and ml_prediction:
         # Shadow mode: score WITH and WITHOUT LSTM, log both, but only act on indicator-only

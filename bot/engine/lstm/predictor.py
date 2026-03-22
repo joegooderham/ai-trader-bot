@@ -101,7 +101,7 @@ class LSTMPredictor:
         self._loaded = False
         self._load_model()
 
-    def predict(self, pair: str, df) -> Optional[dict]:
+    def predict(self, pair: str, df, mcp_context: dict = None, htf_df=None) -> Optional[dict]:
         """
         Generate a direction prediction for a currency pair.
 
@@ -110,6 +110,9 @@ class LSTMPredictor:
             df: DataFrame with OHLCV columns and DatetimeIndex,
                 must have at least SEQUENCE_LENGTH + 50 rows
                 (50 for indicator warm-up, 30 for the sequence window)
+            mcp_context: Optional MCP context dict for enhanced features
+                (sentiment, COT, FRED, volatility — injected as features 19-25)
+            htf_df: Optional H4 candle DataFrame for multi-timeframe features
 
         Returns:
             dict with:
@@ -125,7 +128,17 @@ class LSTMPredictor:
 
         try:
             # Step 1: Build features from raw candle data
-            features = build_features(df)
+            # Use enhanced features (25) if MCP context is available AND the model
+            # was trained with enhanced features. Otherwise fall back to base (18).
+            model_input_size = self.model.lstm.input_size if hasattr(self.model, 'lstm') else NUM_FEATURES
+            use_enhanced = (mcp_context is not None and model_input_size > NUM_FEATURES)
+
+            if use_enhanced:
+                from bot.engine.lstm.features import build_enhanced_features
+                features = build_enhanced_features(df, mcp_context=mcp_context, htf_df=htf_df)
+            else:
+                features = build_features(df)
+
             if len(features) < SEQUENCE_LENGTH:
                 logger.debug(f"{pair}: Not enough feature rows ({len(features)}) for LSTM prediction")
                 return None

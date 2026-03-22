@@ -29,7 +29,10 @@ import pandas as pd
 import ta
 from loguru import logger
 
-NUM_FEATURES = 18
+# Feature count: 18 base + 7 enhanced (MCP signals + multi-timeframe)
+NUM_BASE_FEATURES = 18
+NUM_ENHANCED_FEATURES = 7  # MCP + HTF features added when available
+NUM_FEATURES = NUM_BASE_FEATURES  # Updated at runtime if enhanced features used
 SEQUENCE_LENGTH = 30
 
 
@@ -124,6 +127,111 @@ def build_features(df: pd.DataFrame) -> np.ndarray:
     features = features.clip(-5, 5)
 
     return features.values.astype(np.float32)
+
+
+def build_enhanced_features(
+    df: pd.DataFrame,
+    mcp_context: dict = None,
+    htf_df: pd.DataFrame = None,
+) -> np.ndarray:
+    """
+    Build the full 25-feature array: 18 base technical features + 7 enhanced.
+
+    Enhanced features (19-25):
+      19. ig_sentiment_norm     — IG retail positioning scaled to -1 (all short) to +1 (all long)
+      20. myfxbook_sentiment    — Myfxbook community positioning (-1 to +1)
+      21. cot_bias_norm         — CFTC institutional positioning scaled to -1/+1
+      22. fred_rate_diff_norm   — Interest rate differential scaled by max 5%
+      23. volatility_regime     — 0.0 (low), 0.5 (normal), 0.75 (high), 1.0 (extreme)
+      24. htf_trend             — Higher timeframe trend: -1 (bearish), 0 (neutral), +1 (bullish)
+      25. htf_rsi_norm          — Higher timeframe RSI scaled to 0-1
+
+    If MCP context or HTF data is not available, enhanced features are filled
+    with neutral values (0 or 0.5) so the model can still function.
+
+    Args:
+        df: H1 candle DataFrame
+        mcp_context: MCP context dict from /context/{pair} (optional)
+        htf_df: H4 candle DataFrame for multi-timeframe features (optional)
+
+    Returns:
+        numpy array of shape (N, 25)
+    """
+    # Start with the base 18 features
+    base = build_features(df)
+    if len(base) == 0:
+        return base
+
+    n_rows = len(base)
+
+    # Build enhanced features — fill with neutral defaults if unavailable
+    enhanced = np.zeros((n_rows, NUM_ENHANCED_FEATURES), dtype=np.float32)
+
+    # Feature 19: IG Client Sentiment (scale long% to -1..+1)
+    if mcp_context:
+        ig = mcp_context.get("client_sentiment", {})
+        long_pct = ig.get("long_percentage", 50)
+        # Scale: 0% long = -1.0, 50% = 0.0, 100% = +1.0
+        enhanced[:, 0] = (long_pct - 50) / 50.0
+
+    # Feature 20: Myfxbook Sentiment
+    if mcp_context:
+        mfx = mcp_context.get("myfxbook_sentiment", {})
+        mfx_long = mfx.get("long_percentage", 50)
+        enhanced[:, 1] = (mfx_long - 50) / 50.0
+
+    # Feature 21: COT Institutional Bias (-1 = strong sell, +1 = strong buy)
+    if mcp_context:
+        cot = mcp_context.get("cot_positioning", {})
+        cot_bias = cot.get("bias", "NEUTRAL")
+        cot_strength = cot.get("bias_strength", 0) / 100.0
+        if cot_bias == "BUY":
+            enhanced[:, 2] = cot_strength
+        elif cot_bias == "SELL":
+            enhanced[:, 2] = -cot_strength
+
+    # Feature 22: FRED Rate Differential (scaled by max ~5%)
+    if mcp_context:
+        fred = mcp_context.get("fred_macro", {})
+        rate_diff = fred.get("rate_differential", 0)
+        enhanced[:, 3] = np.clip(rate_diff / 5.0, -1.0, 1.0)
+
+    # Feature 23: Volatility Regime (ordinal encoding)
+    if mcp_context:
+        vol_regime = mcp_context.get("volatility_regime", "normal")
+        regime_map = {"low": 0.0, "normal": 0.5, "high": 0.75, "extreme": 1.0}
+        enhanced[:, 4] = regime_map.get(vol_regime, 0.5)
+
+    # Features 24-25: Higher Timeframe (H4) context
+    if htf_df is not None and len(htf_df) >= 50:
+        try:
+            htf_close = htf_df["close"]
+            htf_ema20 = ta.trend.EMAIndicator(htf_close, window=20).ema_indicator()
+            htf_ema50 = ta.trend.EMAIndicator(htf_close, window=50).ema_indicator()
+            htf_rsi = ta.momentum.RSIIndicator(htf_close, window=14).rsi()
+
+            # HTF trend: EMA20 vs EMA50
+            last_ema20 = htf_ema20.iloc[-1]
+            last_ema50 = htf_ema50.iloc[-1]
+            if last_ema20 > last_ema50 * 1.001:
+                enhanced[:, 5] = 1.0   # Bullish
+            elif last_ema20 < last_ema50 * 0.999:
+                enhanced[:, 5] = -1.0  # Bearish
+            else:
+                enhanced[:, 5] = 0.0   # Neutral
+
+            # HTF RSI normalised to 0-1
+            last_rsi = htf_rsi.iloc[-1]
+            if not np.isnan(last_rsi):
+                enhanced[:, 6] = last_rsi / 100.0
+            else:
+                enhanced[:, 6] = 0.5
+        except Exception:
+            pass  # Keep defaults (0)
+
+    # Concatenate: (N, 18) + (N, 7) = (N, 25)
+    combined = np.concatenate([base, enhanced], axis=1)
+    return combined
 
 
 def build_labels(df: pd.DataFrame, atr_series: pd.Series,

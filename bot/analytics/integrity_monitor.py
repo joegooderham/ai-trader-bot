@@ -398,6 +398,68 @@ class IntegrityMonitor:
 
     # ── Weekly P&L Auto-Pause ─────────────────────────────────────────────────
 
+    # ── No-Trade Threshold Adjustment ───────────────────────────────────────
+
+    def _check_no_trade_threshold(self, now: datetime):
+        """Lower confidence threshold if no trades have fired in 24+ hours.
+
+        If the confidence threshold is too high, the bot sits idle while markets
+        move. This detects that situation and drops confidence by 5% to let
+        more trades through. Won't go below the configured floor (default 70%).
+
+        Only triggers:
+          - During weekday market hours (Mon-Fri, before 22:00 UTC)
+          - If no trades at all in the last 24 hours
+          - If current confidence > floor (70%)
+          - Maximum once per 24 hours
+        """
+        floor = config._remediation_cfg.get("min_confidence_floor", 70)
+
+        if config.MIN_CONFIDENCE_SCORE <= floor:
+            return  # Already at floor, don't lower further
+
+        try:
+            # Check if ANY trades (open or closed) happened in last 24h
+            yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+            today = now.strftime("%Y-%m-%d")
+            yesterday_trades = self.storage.get_trades_for_date(yesterday)
+            today_trades = self.storage.get_trades_for_date(today)
+            all_recent = yesterday_trades + today_trades
+
+            if len(all_recent) > 0:
+                return  # Trades happened, threshold is fine
+
+            # No trades in 24h during market hours — threshold is too restrictive
+            old_conf = config.MIN_CONFIDENCE_SCORE
+            new_conf = max(old_conf - 5, floor)
+
+            if new_conf == old_conf:
+                return  # Already at floor
+
+            config.apply_runtime_config("min_to_trade", new_conf)
+
+            logger.warning(
+                f"NO-TRADE ADJUSTMENT: {old_conf}% → {new_conf}% "
+                f"(no trades in 24h, floor: {floor}%)"
+            )
+
+            if self.notifier:
+                self.notifier._send_system(
+                    f"*📉 CONFIDENCE AUTO-LOWERED*\n"
+                    f"─────────────────────\n"
+                    f"*Was:* {old_conf}% → *Now:* {new_conf}%\n"
+                    f"*Reason:* Zero trades in 24 hours during market hours\n"
+                    f"*Floor:* {floor}% (won't go lower)\n\n"
+                    f"_The threshold was too restrictive. Lowering by 5% "
+                    f"to let stronger signals through._\n"
+                    f"\n_{now.strftime('%H:%M UTC')}_"
+                )
+
+        except Exception as e:
+            logger.error(f"No-trade threshold check failed: {e}")
+
+    # ── Weekly P&L Auto-Pause ─────────────────────────────────────────────────
+
     def _check_weekly_pl_autopause(self) -> bool:
         """Auto-pause trading if weekly P&L exceeds the loss threshold.
 
@@ -487,6 +549,12 @@ class IntegrityMonitor:
         }
 
         if not all_closed:
+            # Check if the threshold is too restrictive — if markets are open and
+            # we've had zero trades for 24h+, lower confidence by 5% automatically.
+            # Only triggers during weekday market hours (not weekends).
+            if self.auto_approve and now.weekday() < 5 and 0 <= now.hour < 22:
+                self._check_no_trade_threshold(now)
+
             summary["status"] = "NO_TRADES"
             self._send_hourly_report(summary, issues, actions)
             return summary

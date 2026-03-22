@@ -219,6 +219,7 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 | BACKLOG-019 | Index trading | Add UK100 (FTSE), US500 (S&P 500), US Tech 100 (Nasdaq), Germany 40 (DAX), Japan 225 via IG. Requires: index epic codes, index-specific volatility profiles, overnight gap risk management. |
 | BACKLOG-020 | Crypto trading | Add BTC/USD, ETH/USD, and top alts via IG. Requires: 24/7 market hours (no EOD close), crypto-specific volatility handling, weekend trading support. |
 | BACKLOG-021 | Multi-portfolio management | Separate portfolio tracking per asset class: independent P&L, risk limits, confidence thresholds, and LSTM models per portfolio. Dashboard shows per-portfolio performance. Lets each asset class be tuned independently. |
+| BACKLOG-022 | Multi-broker support | Abstract the broker layer so the bot can trade across multiple platforms (IG, Interactive Brokers, Alpaca, etc.). Solves API throttling limits on any single broker. Requires: broker interface abstraction in `broker/`, per-broker auth/config, order routing logic (which broker for which asset class), unified position tracking across brokers. |
 | ~~BACKLOG-013~~ | ~~IG Client Sentiment~~ | Done — `mcp_server/client_sentiment.py`, contrarian modifier in `confidence.py` |
 | ~~BACKLOG-014~~ | ~~FRED macro data~~ | Done — `mcp_server/fred_macro.py`, interest rate differential bias. Needs `FRED_API_TOKEN` env var. |
 | ~~BACKLOG-015~~ | ~~Myfxbook sentiment~~ | Done — `mcp_server/myfxbook_sentiment.py`, community contrarian signal. No API key needed. |

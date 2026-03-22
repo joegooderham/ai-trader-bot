@@ -213,7 +213,12 @@ Always add detailed inline comments explaining **why** decisions were made, not 
 
 | ID | Title | Description |
 |----|-------|-------------|
-| BACKLOG-011 | Multi-asset trading (Phase 2) | Add support for UK Stocks, US Stocks, ETFs, Indices, Commodities and Crypto via the existing IG API. Requires: epic code library per asset class, contract sizing updates in `position_sizer.py`, market hours awareness in `scheduler.py`, and asset class config in `config.yaml`. **Prerequisite:** Forex must be consistently profitable on demo before this is started. |
+| BACKLOG-011 | Multi-asset framework | Core infrastructure for trading multiple asset classes: asset class registry, per-class epic mapping, contract sizing per asset type, market hours awareness per exchange, separate config sections per asset class. **Prerequisite:** Forex must be consistently profitable on demo. |
+| BACKLOG-017 | Commodities trading | Add Gold (XAU/USD), Silver (XAG/USD), Crude Oil (WTI), Natural Gas via IG. Requires: commodity epic codes, commodity-specific position sizing (different contract sizes), commodity market hours (futures sessions). IG demo supports all of these. |
+| BACKLOG-018 | ETF trading | Add major ETFs: SPY, QQQ, IWM, EEM, GLD, TLT via IG. Requires: ETF epic mapping, US market hours (14:30-21:00 UTC), dividend/ex-date awareness, different spread characteristics. |
+| BACKLOG-019 | Index trading | Add UK100 (FTSE), US500 (S&P 500), US Tech 100 (Nasdaq), Germany 40 (DAX), Japan 225 via IG. Requires: index epic codes, index-specific volatility profiles, overnight gap risk management. |
+| BACKLOG-020 | Crypto trading | Add BTC/USD, ETH/USD, and top alts via IG. Requires: 24/7 market hours (no EOD close), crypto-specific volatility handling, weekend trading support. |
+| BACKLOG-021 | Multi-portfolio management | Separate portfolio tracking per asset class: independent P&L, risk limits, confidence thresholds, and LSTM models per portfolio. Dashboard shows per-portfolio performance. Lets each asset class be tuned independently. |
 | ~~BACKLOG-013~~ | ~~IG Client Sentiment~~ | Done — `mcp_server/client_sentiment.py`, contrarian modifier in `confidence.py` |
 | ~~BACKLOG-014~~ | ~~FRED macro data~~ | Done — `mcp_server/fred_macro.py`, interest rate differential bias. Needs `FRED_API_TOKEN` env var. |
 | ~~BACKLOG-015~~ | ~~Myfxbook sentiment~~ | Done — `mcp_server/myfxbook_sentiment.py`, community contrarian signal. No API key needed. |

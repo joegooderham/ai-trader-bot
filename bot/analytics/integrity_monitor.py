@@ -89,6 +89,21 @@ class IntegrityMonitor:
         # instead of waiting for user approval. Sends a notification of what changed.
         self.auto_approve = config._remediation_cfg.get("auto_approve", True)
 
+        # ── Optimisation Feedback Loop ────────────────────────────────────────
+        # Tracks applied actions and their pre-fix metrics so we can measure
+        # whether each fix actually improved things. If not, we escalate.
+        #
+        # Format: [{
+        #   "action_title": str, "action_type": str, "config_key": str,
+        #   "config_value": any, "applied_at": datetime,
+        #   "pre_fix_metrics": {"win_rate": float, "pl": float, "trades": int},
+        #   "review_after": datetime,  # When to check if it helped
+        #   "escalation_level": int,   # 0 = first fix, 1 = escalated, etc.
+        # }]
+        self._applied_fixes: list[dict] = []
+        # How long to wait before reviewing a fix's impact (hours)
+        self._review_delay_hours = config._remediation_cfg.get("review_delay_hours", 4)
+
     def _next_id(self) -> int:
         """Get the next action ID and increment."""
         aid = self._next_action_id
@@ -433,7 +448,17 @@ class IntegrityMonitor:
         Analyse rolling 24h of trades for red flags.
         Uses smart analysis to diagnose root causes.
         ALWAYS sends a Telegram report with inline buttons when actions exist.
+
+        Also reviews previously applied fixes to check if they're working.
+        If a fix didn't improve things, it escalates automatically.
         """
+        # Review any previously applied fixes before generating new recommendations
+        if self.auto_approve and self._applied_fixes:
+            try:
+                self.review_applied_fixes()
+            except Exception as e:
+                logger.error(f"Fix review failed: {e}")
+
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
 
@@ -1122,21 +1147,44 @@ class IntegrityMonitor:
     # ── Auto-Approve ────────────────────────────────────────────────────────────
 
     def _auto_approve_actions(self, actions: list[ActionableRecommendation]):
-        """Apply all recommended actions automatically and notify the user.
+        """Apply all recommended actions automatically, record pre-fix metrics,
+        and schedule a review to check if the fix actually helped.
 
-        When auto_approve is True, the bot doesn't wait for button presses —
-        it applies every recommendation immediately and sends a summary of
-        what changed. This is for users who want the bot to self-optimise.
+        The feedback loop:
+          1. Snapshot current metrics (win rate, P&L, trade count)
+          2. Apply the fix
+          3. Schedule a review in N hours
+          4. At review time, compare post-fix metrics to pre-fix
+          5. If not improved → escalate (try a stronger fix)
+          6. If improved → keep the change and log success
         """
         if not actions or not self.auto_approve:
             return
 
+        now = datetime.now(timezone.utc)
+
+        # Snapshot current metrics before applying fixes
+        pre_fix_metrics = self._snapshot_metrics()
+
         applied = []
-        for action in list(actions):  # Copy list since apply_action modifies it
+        for action in list(actions):
             try:
                 result = self.apply_action(action.action_id)
                 applied.append(f"✅ #{action.action_id} — {action.title}")
                 logger.info(f"Auto-approved action #{action.action_id}: {action.title}")
+
+                # Record the fix for later review
+                self._applied_fixes.append({
+                    "action_title": action.title,
+                    "action_type": action.action_type,
+                    "config_key": action.config_key,
+                    "config_value": action.config_value,
+                    "applied_at": now,
+                    "pre_fix_metrics": pre_fix_metrics,
+                    "review_after": now + timedelta(hours=self._review_delay_hours),
+                    "escalation_level": 0,
+                    "reviewed": False,
+                })
             except Exception as e:
                 applied.append(f"⚠️ #{action.action_id} — {action.title} (failed: {e})")
                 logger.error(f"Auto-approve failed for #{action.action_id}: {e}")
@@ -1146,11 +1194,239 @@ class IntegrityMonitor:
                 f"*🤖 AUTO-OPTIMISE — {len(applied)} actions applied*\n"
                 f"═════════════════════\n"
                 + "\n".join(applied)
-                + f"\n\n_Auto-approve is ON. Set `remediation.auto_approve: false` "
-                  f"in config.yaml to require manual approval._"
-                + f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+                + f"\n\n_Will review impact in {self._review_delay_hours}h. "
+                  f"If no improvement, will escalate automatically._"
+                + f"\n_{now.strftime('%H:%M UTC')}_"
             )
             self.notifier._send_system(msg)
+
+    def review_applied_fixes(self):
+        """Review previously applied fixes to see if they actually helped.
+
+        Called by the hourly review. For each fix that's past its review time:
+        - Compare current metrics to pre-fix metrics
+        - If improved: log success, remove from tracking
+        - If not improved: escalate with a stronger action
+
+        Escalation ladder per problem type:
+          Level 0: Initial fix (e.g., raise confidence by 10%)
+          Level 1: Stronger fix (e.g., raise confidence by another 10%)
+          Level 2: Aggressive fix (e.g., disable the direction or pair entirely)
+          Level 3: Pause trading — something is fundamentally wrong
+        """
+        now = datetime.now(timezone.utc)
+        still_tracking = []
+
+        for fix in self._applied_fixes:
+            if fix["reviewed"]:
+                continue
+
+            # Not yet time to review
+            if now < fix["review_after"]:
+                still_tracking.append(fix)
+                continue
+
+            # Time to review — compare metrics
+            current_metrics = self._snapshot_metrics()
+            pre = fix["pre_fix_metrics"]
+            improved = self._compare_metrics(pre, current_metrics)
+
+            if improved:
+                logger.info(
+                    f"Fix review PASSED: '{fix['action_title']}' — "
+                    f"win rate {pre['win_rate']:.0f}% → {current_metrics['win_rate']:.0f}%, "
+                    f"P&L £{pre['recent_pl']:.2f} → £{current_metrics['recent_pl']:.2f}"
+                )
+                if self.notifier:
+                    self.notifier._send_system(
+                        f"*✅ FIX WORKING*\n"
+                        f"_{fix['action_title']}_ applied {self._review_delay_hours}h ago\n"
+                        f"Win rate: {pre['win_rate']:.0f}% → {current_metrics['win_rate']:.0f}%\n"
+                        f"Recent P&L: £{pre['recent_pl']:.2f} → £{current_metrics['recent_pl']:.2f}\n"
+                        f"_Keeping this change._"
+                    )
+                fix["reviewed"] = True
+            else:
+                # Not improved — escalate
+                level = fix["escalation_level"] + 1
+                logger.warning(
+                    f"Fix review FAILED: '{fix['action_title']}' — "
+                    f"escalating to level {level}"
+                )
+                escalation = self._escalate(fix, level, current_metrics)
+                fix["reviewed"] = True
+
+                if escalation:
+                    still_tracking.append(escalation)
+
+        self._applied_fixes = [f for f in self._applied_fixes if not f["reviewed"]] + still_tracking
+
+    def _snapshot_metrics(self) -> dict:
+        """Snapshot current trading metrics for before/after comparison."""
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+            today_trades = self.storage.get_trades_for_date(today)
+            yesterday_trades = self.storage.get_trades_for_date(yesterday)
+            recent = [t for t in (yesterday_trades + today_trades) if t.get("closed_at")]
+
+            if not recent:
+                return {"win_rate": 0, "recent_pl": 0, "trade_count": 0}
+
+            wins = sum(1 for t in recent if (t.get("pl") or 0) > 0.01)
+            total_pl = sum(t.get("pl", 0) for t in recent)
+
+            return {
+                "win_rate": wins / len(recent) * 100 if recent else 0,
+                "recent_pl": total_pl,
+                "trade_count": len(recent),
+            }
+        except Exception as e:
+            logger.error(f"Metrics snapshot failed: {e}")
+            return {"win_rate": 0, "recent_pl": 0, "trade_count": 0}
+
+    def _compare_metrics(self, pre: dict, post: dict) -> bool:
+        """Compare pre-fix and post-fix metrics. Returns True if improved.
+
+        Improvement means ANY of:
+        - Win rate increased by >= 5 percentage points
+        - Recent P&L improved (less negative or more positive)
+        - No new trades yet (too early to judge — give benefit of doubt)
+        """
+        # If no trades happened since the fix, it's too early — don't escalate
+        if post["trade_count"] <= pre["trade_count"]:
+            return True  # Benefit of the doubt
+
+        # Win rate improved
+        if post["win_rate"] >= pre["win_rate"] + 5:
+            return True
+
+        # P&L improved
+        if post["recent_pl"] > pre["recent_pl"]:
+            return True
+
+        # Both got worse
+        return False
+
+    def _escalate(self, fix: dict, level: int, current_metrics: dict) -> dict:
+        """Escalate a failed fix to a stronger action.
+
+        Escalation ladder:
+          Level 1: Tighten the same parameter further
+          Level 2: Disable the problematic direction or pair
+          Level 3: Pause trading entirely
+        """
+        now = datetime.now(timezone.utc)
+        action_type = fix["action_type"]
+        config_key = fix["config_key"]
+
+        escalation_msg = None
+
+        if level >= 3:
+            # Maximum escalation — pause trading
+            import bot.scheduler as scheduler
+            if not scheduler._trading_paused:
+                scheduler._trading_paused = True
+                escalation_msg = (
+                    f"*🚨 ESCALATION LEVEL 3 — TRADING PAUSED*\n"
+                    f"═════════════════════\n"
+                    f"Previous fix _{fix['action_title']}_ didn't improve results "
+                    f"after {self._review_delay_hours}h.\n"
+                    f"Win rate: {current_metrics['win_rate']:.0f}% | "
+                    f"P&L: £{current_metrics['recent_pl']:.2f}\n\n"
+                    f"Trading is PAUSED until you /resume manually.\n"
+                    f"_Three escalation levels exhausted — human review needed._"
+                )
+
+        elif level == 2:
+            # Aggressive: disable direction or pair
+            if action_type == "runtime_config_change" and config_key == "min_to_trade":
+                # Was raising confidence — now disable the worst direction
+                week_trades = self.storage.get_trades_for_week()
+                closed = [t for t in week_trades if t.get("closed_at")]
+                buy_pl = sum(t.get("pl", 0) for t in closed if t.get("direction") == "BUY")
+                sell_pl = sum(t.get("pl", 0) for t in closed if t.get("direction") == "SELL")
+                worst_dir = "SELL" if sell_pl < buy_pl else "BUY"
+
+                if worst_dir not in config.DISABLED_DIRECTIONS:
+                    config.DISABLED_DIRECTIONS.add(worst_dir)
+                    escalation_msg = (
+                        f"*⚠️ ESCALATION LEVEL 2 — {worst_dir} DISABLED*\n"
+                        f"Raising confidence didn't help. {worst_dir} trades "
+                        f"lost £{min(buy_pl, sell_pl):.2f} this week.\n"
+                        f"Disabled {worst_dir} until conditions improve.\n"
+                        f"_Will review in {self._review_delay_hours}h._"
+                    )
+            elif action_type in ("disable_direction", "remove_pair"):
+                # Already disabled something — try pausing
+                return self._escalate(fix, 3, current_metrics)
+            else:
+                # Generic level 2: raise confidence by another 10%
+                new_conf = min(config.MIN_CONFIDENCE_SCORE + 10, 95)
+                config.apply_runtime_config("min_to_trade", new_conf)
+                escalation_msg = (
+                    f"*⚠️ ESCALATION LEVEL 2 — Confidence raised to {new_conf}%*\n"
+                    f"Previous fix didn't improve results. Tightening filter further.\n"
+                    f"_Will review in {self._review_delay_hours}h._"
+                )
+
+        elif level == 1:
+            # Moderate: tighten the same parameter
+            if action_type == "runtime_config_change" and config_key == "min_to_trade":
+                new_conf = min(config.MIN_CONFIDENCE_SCORE + 5, 95)
+                config.apply_runtime_config("min_to_trade", new_conf)
+                escalation_msg = (
+                    f"*⚠️ ESCALATION LEVEL 1 — Confidence raised to {new_conf}%*\n"
+                    f"_{fix['action_title']}_ didn't improve results after "
+                    f"{self._review_delay_hours}h. Tightening further.\n"
+                    f"_Will review in {self._review_delay_hours}h._"
+                )
+            elif config_key == "stop_loss_atr_multiplier":
+                new_sl = config.STOP_LOSS_ATR_MULTIPLIER + 0.5
+                config.apply_runtime_config("stop_loss_atr_multiplier", new_sl)
+                escalation_msg = (
+                    f"*⚠️ ESCALATION LEVEL 1 — SL widened to {new_sl}x ATR*\n"
+                    f"Previous SL change didn't help. Widening further.\n"
+                    f"_Will review in {self._review_delay_hours}h._"
+                )
+            elif config_key == "trailing_stop_trail_atr":
+                new_trail = config.TRAILING_STOP_TRAIL_ATR + 0.5
+                config.apply_runtime_config("trailing_stop_trail_atr", new_trail)
+                escalation_msg = (
+                    f"*⚠️ ESCALATION LEVEL 1 — Trail widened to {new_trail}x ATR*\n"
+                    f"Previous trail change didn't help. Widening further.\n"
+                    f"_Will review in {self._review_delay_hours}h._"
+                )
+            else:
+                # Generic: raise confidence
+                new_conf = min(config.MIN_CONFIDENCE_SCORE + 5, 95)
+                config.apply_runtime_config("min_to_trade", new_conf)
+                escalation_msg = (
+                    f"*⚠️ ESCALATION LEVEL 1 — Confidence raised to {new_conf}%*\n"
+                    f"_{fix['action_title']}_ didn't improve. Raising confidence.\n"
+                    f"_Will review in {self._review_delay_hours}h._"
+                )
+
+        if escalation_msg:
+            logger.warning(f"Escalation level {level}: {escalation_msg[:100]}")
+            if self.notifier:
+                self.notifier._send_system(escalation_msg)
+
+            # Track the escalation for further review
+            return {
+                "action_title": f"Escalation L{level} from: {fix['action_title']}",
+                "action_type": fix["action_type"],
+                "config_key": fix["config_key"],
+                "config_value": fix["config_value"],
+                "applied_at": now,
+                "pre_fix_metrics": current_metrics,
+                "review_after": now + timedelta(hours=self._review_delay_hours),
+                "escalation_level": level,
+                "reviewed": False,
+            }
+
+        return None
 
     # ── Alert Dispatch (always sends) ─────────────────────────────────────────
 

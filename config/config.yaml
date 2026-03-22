@@ -281,6 +281,10 @@ remediation:
   # what it changed via Telegram. Set to false if you want manual control.
   auto_approve: true
 
+  # How many hours to wait after a fix before reviewing whether it helped.
+  # If no improvement, the system escalates: L1 (tighten), L2 (disable), L3 (pause)
+  review_delay_hours: 4
+
   # If weekly P&L drops below this, auto-pause trading (no approval needed)
   autopause_weekly_loss_threshold: -50
 

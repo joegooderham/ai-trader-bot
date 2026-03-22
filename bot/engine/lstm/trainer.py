@@ -21,6 +21,8 @@ Runs continuously on a configurable interval via scheduler, or manually via:
 """
 
 import time
+from datetime import datetime, timezone, timedelta
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -216,6 +218,21 @@ class LSTMTrainer:
             all_labels.append(y)
             logger.info(f"{pair}: {len(X)} training sequences (BUY={np.sum(y==0)}, SELL={np.sum(y==1)}, HOLD={np.sum(y==2)})")
 
+        # ── Incorporate real trade outcomes ──────────────────────────────────────
+        # Boost the weight of candle sequences where we have actual trade results.
+        # This teaches the LSTM from real P&L, not just price movement predictions.
+        # Winning trades reinforce the signal direction, losing trades reinforce
+        # the opposite direction so the model learns to avoid those setups.
+        try:
+            trade_labels = self._build_trade_outcome_labels(pairs)
+            if trade_labels:
+                all_features.extend([tl[0] for tl in trade_labels])
+                all_labels.extend([tl[1] for tl in trade_labels])
+                total_outcome_samples = sum(len(tl[0]) for tl in trade_labels)
+                logger.info(f"Added {total_outcome_samples} samples from real trade outcomes")
+        except Exception as e:
+            logger.warning(f"Trade outcome label generation failed (continuing without): {e}")
+
         if not all_features:
             logger.error("No training data available")
             return None, None, None, None, None
@@ -240,6 +257,105 @@ class LSTMTrainer:
         logger.info(f"Dataset: {len(X_train)} train, {len(X_val)} validation sequences")
 
         return X_train, y_train, X_val, y_val, scaler
+
+    def _build_trade_outcome_labels(self, pairs: list) -> list:
+        """Build training samples from real trade outcomes.
+
+        For each closed trade, finds the candle sequence at the time of entry
+        and labels it based on the ACTUAL trade result (not price movement):
+          - Winning BUY trade → label as BUY (0) — reinforce this pattern
+          - Winning SELL trade → label as SELL (1) — reinforce this pattern
+          - Losing BUY trade → label as SELL (1) — should have gone the other way
+          - Losing SELL trade → label as BUY (0) — should have gone the other way
+          - Breakeven → label as HOLD (2)
+
+        These samples are added to the training set so the LSTM learns from
+        actual trading performance, not just theoretical price predictions.
+        Winning patterns get reinforced, losing patterns get corrected.
+        """
+        import sqlite3
+        from data.storage import DB_PATH
+
+        result = []
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH), timeout=10)
+            conn.row_factory = sqlite3.Row
+
+            # Get all closed trades from the last 30 days with known outcomes
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            trades = conn.execute(
+                "SELECT pair, direction, pl, opened_at FROM trades "
+                "WHERE closed_at IS NOT NULL AND pl IS NOT NULL AND opened_at >= ? "
+                "ORDER BY opened_at",
+                (cutoff,)
+            ).fetchall()
+            conn.close()
+
+            if not trades:
+                return result
+
+            for trade in trades:
+                pair = trade["pair"]
+                direction = trade["direction"]
+                pl = trade["pl"]
+                opened_at = trade["opened_at"]
+
+                # Determine label from actual outcome
+                if abs(pl) < 0.01:
+                    label = 2  # HOLD — breakeven
+                elif pl > 0:
+                    # Winner — reinforce the direction
+                    label = 0 if direction == "BUY" else 1
+                else:
+                    # Loser — label as the opposite direction (should have avoided this)
+                    label = 1 if direction == "BUY" else 0
+
+                # Find the candle sequence at the time of trade entry
+                df = self.storage.get_candles(pair, "H1", count=5000)
+                if df is None or len(df) < SEQUENCE_LENGTH + 10:
+                    continue
+
+                # Find the candle closest to the trade open time
+                try:
+                    trade_time = pd.Timestamp(opened_at)
+                    # Find index of the closest candle
+                    if hasattr(df.index, 'get_indexer'):
+                        idx = df.index.get_indexer([trade_time], method='nearest')[0]
+                    else:
+                        idx = len(df) - 1
+                except Exception:
+                    continue
+
+                if idx < SEQUENCE_LENGTH:
+                    continue
+
+                # Build features for the sequence ending at this candle
+                features = build_features(df.iloc[:idx + 1])
+                if len(features) < SEQUENCE_LENGTH:
+                    continue
+
+                # Take the last SEQUENCE_LENGTH features as one sample
+                seq = features[-SEQUENCE_LENGTH:]
+                X = np.expand_dims(seq, axis=0)  # Shape: (1, seq_len, n_features)
+                y = np.array([label])
+
+                # Duplicate winning trade samples (2x weight) to emphasise what works
+                if pl > 0:
+                    X = np.repeat(X, 2, axis=0)
+                    y = np.repeat(y, 2)
+
+                result.append((X, y))
+
+            logger.info(
+                f"Trade outcome feedback: {len(trades)} trades → "
+                f"{sum(len(r[0]) for r in result)} training samples"
+            )
+
+        except Exception as e:
+            logger.warning(f"Trade outcome label builder failed: {e}")
+
+        return result
 
     def _run_training(self, X_train, y_train, X_val, y_val, scaler,
                       epochs: int, batch_size: int, lr: float, patience: int) -> dict:

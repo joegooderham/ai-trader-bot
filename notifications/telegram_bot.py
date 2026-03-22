@@ -94,13 +94,18 @@ class TelegramNotifier:
             logger.error(f"Failed to send Telegram message: {e}")
 
     def send_action_buttons(self, message: str, actions: list):
-        """Send a system message with inline approve/reject buttons for each action.
+        """Send a message with inline approve/reject buttons for each action.
+
+        IMPORTANT: Uses the TRADING bot token (not system bot) because the
+        CallbackQueryHandler that processes button presses runs on the trading
+        bot's polling loop. Messages sent via the system bot token would have
+        no callback handler, making buttons unresponsive.
 
         Each action should have .action_id and .title attributes.
         Buttons use callback data format: action_approve:{id} / action_reject:{id}
         """
         if not actions:
-            # No actions — send plain message
+            # No actions — send plain system message
             self._send_system(message)
             return
 
@@ -120,7 +125,8 @@ class TelegramNotifier:
             keyboard.append(row)
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        self._send_system(message, reply_markup=reply_markup)
+        # Send via TRADING bot (self.token) so the callback handler can process button presses
+        self._do_send(message, self.token, reply_markup=reply_markup)
 
     # ── Trade Notifications ───────────────────────────────────────────────────
 

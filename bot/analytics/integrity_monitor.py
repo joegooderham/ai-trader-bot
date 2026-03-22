@@ -85,6 +85,9 @@ class IntegrityMonitor:
         self.pending_actions: list[ActionableRecommendation] = []
         # Counter for unique action IDs across the session
         self._next_action_id = 1
+        # Auto-approve mode: when True, the bot applies recommendations automatically
+        # instead of waiting for user approval. Sends a notification of what changed.
+        self.auto_approve = config._remediation_cfg.get("auto_approve", True)
 
     def _next_id(self) -> int:
         """Get the next action ID and increment."""
@@ -636,8 +639,9 @@ class IntegrityMonitor:
         summary["actions"] = actions
         summary["status"] = "WARNING" if issues else "HEALTHY"
 
-        # Store pending actions for approve/reject
-        self.pending_actions = actions
+        # Append new actions to pending list (don't overwrite — deep review
+        # actions would be lost when the next hourly run fires)
+        self.pending_actions.extend(actions)
 
         # ALWAYS send — with inline buttons when actions exist
         self._send_hourly_report(summary, issues, actions)
@@ -1115,6 +1119,39 @@ class IntegrityMonitor:
         except Exception as e:
             logger.error(f"Daily LSTM health check failed: {e}")
 
+    # ── Auto-Approve ────────────────────────────────────────────────────────────
+
+    def _auto_approve_actions(self, actions: list[ActionableRecommendation]):
+        """Apply all recommended actions automatically and notify the user.
+
+        When auto_approve is True, the bot doesn't wait for button presses —
+        it applies every recommendation immediately and sends a summary of
+        what changed. This is for users who want the bot to self-optimise.
+        """
+        if not actions or not self.auto_approve:
+            return
+
+        applied = []
+        for action in list(actions):  # Copy list since apply_action modifies it
+            try:
+                result = self.apply_action(action.action_id)
+                applied.append(f"✅ #{action.action_id} — {action.title}")
+                logger.info(f"Auto-approved action #{action.action_id}: {action.title}")
+            except Exception as e:
+                applied.append(f"⚠️ #{action.action_id} — {action.title} (failed: {e})")
+                logger.error(f"Auto-approve failed for #{action.action_id}: {e}")
+
+        if applied and self.notifier:
+            msg = (
+                f"*🤖 AUTO-OPTIMISE — {len(applied)} actions applied*\n"
+                f"═════════════════════\n"
+                + "\n".join(applied)
+                + f"\n\n_Auto-approve is ON. Set `remediation.auto_approve: false` "
+                  f"in config.yaml to require manual approval._"
+                + f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+            )
+            self.notifier._send_system(msg)
+
     # ── Alert Dispatch (always sends) ─────────────────────────────────────────
 
     def _send_hourly_report(self, summary: dict, issues: list[str],
@@ -1184,6 +1221,9 @@ class IntegrityMonitor:
             self._send_split(msg)
 
         logger.info(f"Hourly integrity report sent: {status}, {len(issues)} issues, {len(actions)} actions")
+
+        # Auto-approve: apply actions immediately without waiting for user
+        self._auto_approve_actions(actions)
 
     def _send_deep_report(self, summary: dict, issues: list[str],
                           actions: list[ActionableRecommendation],
@@ -1264,6 +1304,9 @@ class IntegrityMonitor:
             self._send_split(msg)
 
         logger.info(f"Deep integrity report sent: {status}, {len(issues)} issues, {len(actions)} actions")
+
+        # Auto-approve: apply actions immediately without waiting for user
+        self._auto_approve_actions(actions)
 
     def _send_split(self, message: str):
         """Send a message, splitting if it exceeds Telegram's 4096 char limit."""
@@ -1533,7 +1576,14 @@ class IntegrityMonitor:
         """
         Generate a comprehensive integrity report for the /integrity command.
         Runs all checks and returns a formatted Telegram message.
+
+        Resets pending actions and IDs so on-demand reports start from #1,
+        giving clean action numbering for /action and /discuss commands.
         """
+        # Reset so the full report starts with clean action IDs (#1, #2, ...)
+        self.pending_actions = []
+        self._next_action_id = 1
+
         hourly = self.hourly_review()
         deep = self.deep_review()
 

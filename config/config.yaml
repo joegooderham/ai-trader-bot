@@ -276,8 +276,12 @@ lstm:
 # ─────────────────────────────────────────────────────────────────────────────
 
 remediation:
+  # Auto-approve: when true, the bot applies ALL remediation recommendations
+  # automatically without waiting for you to tap Approve. It notifies you of
+  # what it changed via Telegram. Set to false if you want manual control.
+  auto_approve: true
+
   # If weekly P&L drops below this, auto-pause trading (no approval needed)
-  # This is the only autonomous action — everything else requires your approval
   autopause_weekly_loss_threshold: -50
 
   # Alert when BUY or SELL win rate drops below this % over 7 days

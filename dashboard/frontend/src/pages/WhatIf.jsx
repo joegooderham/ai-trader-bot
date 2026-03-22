@@ -66,7 +66,7 @@ export default function WhatIf() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-2">Mystic-Wolf</h2>
+      <h2 className="text-2xl font-bold mb-2">Mystic Wolf</h2>
       <p className="text-sm text-gray-500 mb-6">
         Replay historical trades with different settings. See which trades would have been filtered and how P&L changes.
       </p>

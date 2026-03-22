@@ -11,6 +11,7 @@ const navGroups = [
       { to: '/positions', label: 'Positions' },
       { to: '/trades', label: 'Trades' },
       { to: '/journal', label: 'Journal' },
+      { to: '/scan-log', label: 'Scan Log' },
     ],
   },
   {
@@ -19,6 +20,8 @@ const navGroups = [
       { to: '/analytics', label: 'LSTM Analytics' },
       { to: '/heatmap', label: 'Heatmap' },
       { to: '/sessions', label: 'Sessions' },
+      { to: '/correlations', label: 'Correlations' },
+      { to: '/risk', label: 'Risk Exposure' },
     ],
   },
   {

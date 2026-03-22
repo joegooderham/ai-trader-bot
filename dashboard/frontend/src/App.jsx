@@ -16,6 +16,9 @@ import TradeJournal from './pages/TradeJournal'
 import Heatmap from './pages/Heatmap'
 import SessionAnalysis from './pages/SessionAnalysis'
 import WhatIf from './pages/WhatIf'
+import Correlations from './pages/Correlations'
+import RiskExposure from './pages/RiskExposure'
+import ScanLog from './pages/ScanLog'
 
 export default function App() {
   return (
@@ -25,10 +28,13 @@ export default function App() {
         <Route path="/positions" element={<Positions />} />
         <Route path="/trades" element={<TradeHistory />} />
         <Route path="/journal" element={<TradeJournal />} />
+        <Route path="/scan-log" element={<ScanLog />} />
         <Route path="/summary" element={<Summary />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/heatmap" element={<Heatmap />} />
         <Route path="/sessions" element={<SessionAnalysis />} />
+        <Route path="/correlations" element={<Correlations />} />
+        <Route path="/risk" element={<RiskExposure />} />
         <Route path="/what-if" element={<WhatIf />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/remediation" element={<Remediation />} />

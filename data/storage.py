@@ -181,6 +181,28 @@ def _init_db():
                 context_json TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            -- Scan audit log — records EVERY pair evaluation, not just trades.
+            -- Captures the full decision context so you can review why the bot
+            -- did or didn't trade at any point in time.
+            CREATE TABLE IF NOT EXISTS scan_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                pair TEXT NOT NULL,
+                direction TEXT,
+                confidence_score REAL,
+                traded INTEGER DEFAULT 0,
+                skip_reason TEXT,
+                indicators_json TEXT,
+                mcp_context_json TEXT,
+                lstm_prediction_json TEXT,
+                breakdown_json TEXT,
+                reasoning TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scan_log_pair_time
+                ON scan_log(pair, timestamp);
         """)
         conn.commit()
 
@@ -365,6 +387,40 @@ class TradeStorage:
                 (cutoff,)
             ).fetchall()
             return [self._row_to_dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def save_scan_log(self, entry: dict):
+        """Save a scan evaluation to the audit log.
+
+        Records the full decision context for every pair evaluation —
+        whether a trade was opened or not. This lets you review
+        'why didn't the bot trade here?' after the fact.
+        """
+        conn = _get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO scan_log "
+                "(timestamp, pair, direction, confidence_score, traded, skip_reason, "
+                "indicators_json, mcp_context_json, lstm_prediction_json, breakdown_json, reasoning) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry.get("timestamp"),
+                    entry.get("pair"),
+                    entry.get("direction"),
+                    entry.get("confidence_score"),
+                    1 if entry.get("traded") else 0,
+                    entry.get("skip_reason"),
+                    json.dumps(entry.get("indicators")) if entry.get("indicators") else None,
+                    json.dumps(entry.get("mcp_context")) if entry.get("mcp_context") else None,
+                    json.dumps(entry.get("lstm_prediction")) if entry.get("lstm_prediction") else None,
+                    json.dumps(entry.get("breakdown")) if entry.get("breakdown") else None,
+                    entry.get("reasoning"),
+                )
+            )
+            conn.commit()
+        except Exception as e:
+            logger.debug(f"Failed to save scan log: {e}")
         finally:
             conn.close()
 

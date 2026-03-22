@@ -1435,6 +1435,154 @@ async def what_if_simulation(body: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── API Routes: Correlation Visualiser ───────────────────────────────────────
+
+# Static correlation matrix (same as bot/scheduler.py)
+CORRELATION_MATRIX = {
+    ("EUR_USD", "GBP_USD"): 0.85, ("EUR_USD", "AUD_USD"): 0.70,
+    ("EUR_USD", "NZD_USD"): 0.65, ("EUR_USD", "USD_CAD"): -0.80,
+    ("EUR_USD", "USD_CHF"): -0.90, ("EUR_USD", "USD_JPY"): -0.55,
+    ("GBP_USD", "AUD_USD"): 0.60, ("GBP_USD", "USD_CAD"): -0.70,
+    ("GBP_USD", "USD_CHF"): -0.75, ("GBP_USD", "USD_JPY"): -0.45,
+    ("AUD_USD", "NZD_USD"): 0.90, ("AUD_USD", "USD_CAD"): -0.65,
+    ("USD_JPY", "EUR_JPY"): 0.80, ("USD_JPY", "GBP_JPY"): 0.75,
+    ("EUR_JPY", "GBP_JPY"): 0.90,
+}
+
+@app.get("/api/analytics/correlations")
+async def analytics_correlations():
+    """Pair correlation matrix for the visualiser."""
+    pairs = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD",
+             "USD_CHF", "GBP_JPY", "EUR_GBP", "EUR_JPY", "NZD_USD"]
+    matrix = {}
+    for p1 in pairs:
+        matrix[p1] = {}
+        for p2 in pairs:
+            if p1 == p2:
+                matrix[p1][p2] = 1.0
+            else:
+                corr = CORRELATION_MATRIX.get((p1, p2)) or CORRELATION_MATRIX.get((p2, p1)) or 0.0
+                matrix[p1][p2] = corr
+    return matrix
+
+
+# ── API Routes: Risk Exposure ────────────────────────────────────────────────
+
+@app.get("/api/analytics/risk-exposure")
+async def analytics_risk_exposure():
+    """Portfolio risk exposure — open positions with correlated risk analysis."""
+    try:
+        # Get balance from bot
+        try:
+            balance = await bot_cmd("/cmd/balance", method="GET")
+        except Exception:
+            balance = {"balance": 500, "available": 500, "profit_loss": 0}
+
+        # Get open positions
+        positions = []
+        try:
+            with get_db() as db:
+                rows = db.execute(
+                    "SELECT pair, direction, size, fill_price, stop_loss, take_profit, "
+                    "confidence_score, opened_at FROM trades WHERE closed_at IS NULL"
+                ).fetchall()
+                positions = [dict(r) for r in rows]
+        except Exception:
+            pass
+
+        # Calculate risk per position
+        total_risk = 0
+        position_risk = []
+        for pos in positions:
+            entry = pos.get("fill_price", 0)
+            sl = pos.get("stop_loss", 0)
+            size = pos.get("size", 0)
+            if entry and sl:
+                risk_pips = abs(entry - sl)
+                # Approximate risk in GBP
+                risk_amount = risk_pips * size * 10  # Rough pip value
+                total_risk += risk_amount
+                position_risk.append({
+                    "pair": pos["pair"],
+                    "direction": pos["direction"],
+                    "risk_amount": round(risk_amount, 2),
+                    "confidence": pos.get("confidence_score"),
+                })
+
+        # Correlated exposure warnings
+        correlated = []
+        open_pairs = [p["pair"] for p in positions]
+        for i, p1 in enumerate(open_pairs):
+            for p2 in open_pairs[i+1:]:
+                corr = CORRELATION_MATRIX.get((p1, p2)) or CORRELATION_MATRIX.get((p2, p1)) or 0.0
+                if abs(corr) >= 0.7:
+                    correlated.append({
+                        "pair_a": p1, "pair_b": p2,
+                        "correlation": corr,
+                        "warning": "high positive" if corr > 0 else "inverse",
+                    })
+
+        account_balance = balance.get("balance", 500)
+        return {
+            "account_balance": account_balance,
+            "available": balance.get("available", 0),
+            "unrealized_pl": balance.get("profit_loss", 0),
+            "open_positions": len(positions),
+            "total_risk": round(total_risk, 2),
+            "risk_pct_of_capital": round(total_risk / account_balance * 100, 1) if account_balance > 0 else 0,
+            "position_risk": position_risk,
+            "correlated_exposure": correlated,
+        }
+    except Exception as e:
+        logger.error(f"Risk exposure failed: {e}")
+        return {"error": str(e)}
+
+
+# ── API Routes: Scan Audit Log ───────────────────────────────────────────────
+
+@app.get("/api/scan-log")
+async def scan_log(pair: str = None, limit: int = 50, traded_only: bool = False):
+    """Scan audit log — every pair evaluation with full decision context."""
+    try:
+        with get_db() as db:
+            query = "SELECT * FROM scan_log"
+            params = []
+            conditions = []
+
+            if pair:
+                conditions.append("pair = ?")
+                params.append(pair)
+            if traded_only:
+                conditions.append("traded = 1")
+
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(limit)
+
+            rows = db.execute(query, params).fetchall()
+
+        result = []
+        for r in rows:
+            entry = dict(r)
+            # Parse JSON fields
+            import json as _json
+            for field in ("indicators_json", "mcp_context_json", "lstm_prediction_json", "breakdown_json"):
+                if entry.get(field):
+                    try:
+                        entry[field.replace("_json", "")] = _json.loads(entry[field])
+                    except Exception:
+                        pass
+                    del entry[field]
+            result.append(entry)
+
+        return {"scans": result, "total": len(result)}
+    except Exception as e:
+        logger.error(f"Scan log query failed: {e}")
+        return {"scans": [], "total": 0}
+
+
 # ── Serve React Frontend ────────────────────────────────────────────────────
 # Mount static files LAST so API routes take priority
 

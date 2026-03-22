@@ -411,6 +411,36 @@ def _evaluate_pair(pair: str, available_capital: float):
         f"Session: {session} (min: {session_min:.0f}%) | Trade: {session_trade}"
     )
 
+    # ── Scan Audit Log — record EVERY evaluation for review ─────────────────
+    # Saves the full decision context whether we trade or not, so you can
+    # review "why didn't the bot trade here?" via the dashboard scan log.
+    skip_reason = None
+    if not session_trade:
+        skip_reason = f"confidence {result.score:.0f}% < session min {session_min:.0f}%"
+    elif result.direction in config.DISABLED_DIRECTIONS:
+        skip_reason = f"{result.direction} direction disabled"
+
+    try:
+        storage.save_scan_log({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pair": pair,
+            "direction": result.direction,
+            "confidence_score": result.score,
+            "traded": session_trade and skip_reason is None,
+            "skip_reason": skip_reason,
+            "indicators": {
+                "rsi": ind.rsi, "macd_signal": ind.macd_signal,
+                "ema_trend": ind.ema_trend, "bb_position": ind.bb_position,
+                "atr": ind.atr, "current_price": ind.current_price,
+            },
+            "mcp_context": {k: v for k, v in mcp_context.items() if k != "timestamp"} if mcp_context else None,
+            "lstm_prediction": ml_prediction,
+            "breakdown": result.breakdown,
+            "reasoning": result.reasoning[:500] if result.reasoning else None,
+        })
+    except Exception as e:
+        logger.debug(f"Scan log save failed: {e}")
+
     if not session_trade:
         return
 

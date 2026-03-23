@@ -4,7 +4,7 @@
 export default function PLBadge({ value, prefix = '£' }) {
   const isProfit = value >= 0
   const color = isProfit ? 'text-profit' : 'text-loss'
-  const sign = isProfit ? '+' : ''
+  const sign = isProfit ? '+' : '-'
 
   return (
     <span className={`font-mono font-semibold ${color}`}>

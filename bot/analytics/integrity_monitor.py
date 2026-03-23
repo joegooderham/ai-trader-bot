@@ -568,18 +568,21 @@ class IntegrityMonitor:
                 f"BREAKEVEN STREAK: {len(breakeven_trades)}/{len(all_closed)} trades "
                 f"({breakeven_pct:.0f}%) closed at £0 P&L"
             )
-            actions.append(ActionableRecommendation(
-                action_id=self._next_id(),
-                title="Widen trailing stop",
-                detail=(
-                    f"Increase trailing_stop_trail_atr from "
-                    f"{config.TRAILING_STOP_TRAIL_ATR} to "
-                    f"{config.TRAILING_STOP_TRAIL_ATR + 0.5} to give trades more room"
-                ),
-                config_key="trailing_stop_trail_atr",
-                config_value=config.TRAILING_STOP_TRAIL_ATR + 0.5,
-                action_type="runtime_config_change",
-            ))
+            # Only recommend widening if below the cap (2.0x ATR).
+            # Beyond 2.0x the trail is too wide to protect profits.
+            if config.TRAILING_STOP_TRAIL_ATR < 2.0:
+                actions.append(ActionableRecommendation(
+                    action_id=self._next_id(),
+                    title="Widen trailing stop",
+                    detail=(
+                        f"Increase trailing_stop_trail_atr from "
+                        f"{config.TRAILING_STOP_TRAIL_ATR} to "
+                        f"{min(config.TRAILING_STOP_TRAIL_ATR + 0.5, 2.0)} to give trades more room"
+                    ),
+                    config_key="trailing_stop_trail_atr",
+                    config_value=min(config.TRAILING_STOP_TRAIL_ATR + 0.5, 2.0),
+                    action_type="runtime_config_change",
+                ))
 
         # ── Check 2: Win Rate ────────────────────────────────────────────────
         wins = [t for t in all_closed if t.get("pl", 0) > 0.01]
@@ -643,23 +646,25 @@ class IntegrityMonitor:
         summary["avg_duration_min"] = round(avg_duration, 1) if avg_duration else None
 
         if avg_duration and avg_duration < 30 and len(durations) >= 3:
-            new_activation = config.TRAILING_STOP_ACTIVATION_ATR + 0.5
             issues.append(
                 f"SHORT DURATION: Average trade lasts {avg_duration:.0f} min "
                 f"(H1 trades should run longer)"
             )
-            actions.append(ActionableRecommendation(
-                action_id=self._next_id(),
-                title=f"Delay trailing stop activation to {new_activation}x ATR",
-                detail=(
-                    f"Current activation: {config.TRAILING_STOP_ACTIVATION_ATR}x ATR. "
-                    f"Raising to {new_activation}x gives trades more room to develop "
-                    f"before the trailing stop kicks in"
-                ),
-                config_key="trailing_stop_activation_atr",
-                config_value=new_activation,
-                action_type="runtime_config_change",
-            ))
+            # Only recommend if below cap (3.0x ATR)
+            if config.TRAILING_STOP_ACTIVATION_ATR < 3.0:
+                new_activation = min(config.TRAILING_STOP_ACTIVATION_ATR + 0.5, 3.0)
+                actions.append(ActionableRecommendation(
+                    action_id=self._next_id(),
+                    title=f"Delay trailing stop activation to {new_activation}x ATR",
+                    detail=(
+                        f"Current activation: {config.TRAILING_STOP_ACTIVATION_ATR}x ATR. "
+                        f"Raising to {new_activation}x gives trades more room to develop "
+                        f"before the trailing stop kicks in"
+                    ),
+                    config_key="trailing_stop_activation_atr",
+                    config_value=new_activation,
+                    action_type="runtime_config_change",
+                ))
 
         # ── Check 5: Smart Losing Streak (replaces simple 5-loss → pause) ────
         sorted_trades = sorted(all_closed, key=lambda t: t.get("closed_at", ""))

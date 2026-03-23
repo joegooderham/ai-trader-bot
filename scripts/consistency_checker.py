@@ -109,9 +109,29 @@ def run_consistency_check(
             if did:
                 db_deal_ids.add(did)
 
+        # Also check by trade_id column (some records use trade_id instead of deal_id)
+        for trade in db_open_trades:
+            tid = trade.get("trade_id")
+            if tid:
+                db_deal_ids.add(tid)
+
         for pos in broker_positions:
             did = pos.get("dealId")
             if did and did not in db_deal_ids:
+                # Grace period: skip positions opened in the last 2 minutes
+                # (race condition between IG confirmation and DB write)
+                open_time = pos.get("openTime") or pos.get("createdDateUTC") or ""
+                if open_time:
+                    try:
+                        from datetime import datetime, timezone
+                        opened = datetime.fromisoformat(open_time.replace("Z", "+00:00"))
+                        age_seconds = (datetime.now(timezone.utc) - opened).total_seconds()
+                        if age_seconds < 120:
+                            logger.debug(f"Consistency: skipping {did} — opened {age_seconds:.0f}s ago (grace period)")
+                            continue
+                    except Exception:
+                        pass
+
                 pair = pos.get("instrument") or pos.get("pair", "Unknown")
                 logger.warning(
                     f"Consistency: {pair} deal={did} is open on IG but has no DB record"

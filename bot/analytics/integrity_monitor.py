@@ -590,18 +590,20 @@ class IntegrityMonitor:
         win_rate = len(wins) / len(all_closed) * 100 if all_closed else 0
 
         if len(all_closed) >= 5 and win_rate < 20:
-            new_confidence = min(config.MIN_CONFIDENCE_SCORE + 10, 80)
+            new_confidence = min(config.MIN_CONFIDENCE_SCORE + 10, 95)
             issues.append(
                 f"WIN RATE COLLAPSE: {win_rate:.0f}% "
                 f"({len(wins)}W / {len(losses)}L / {len(breakeven_trades)}BE)"
             )
-            actions.append(ActionableRecommendation(
-                action_id=self._next_id(),
-                title=f"Raise min confidence to {new_confidence}%",
-                detail=(
-                    f"Current: {config.MIN_CONFIDENCE_SCORE}%. "
-                    f"Raising to {new_confidence}% will filter out weaker signals "
-                    f"and reduce trade frequency until conditions improve"
+            # Only recommend if the new value is actually different from current
+            if new_confidence > config.MIN_CONFIDENCE_SCORE:
+                actions.append(ActionableRecommendation(
+                    action_id=self._next_id(),
+                    title=f"Raise min confidence to {new_confidence}%",
+                    detail=(
+                        f"Current: {config.MIN_CONFIDENCE_SCORE}%. "
+                        f"Raising to {new_confidence}% will filter out weaker signals "
+                        f"and reduce trade frequency until conditions improve"
                 ),
                 config_key="min_to_trade",
                 config_value=new_confidence,
@@ -1232,6 +1234,29 @@ class IntegrityMonitor:
           6. If improved → keep the change and log success
         """
         if not actions or not self.auto_approve:
+            return
+
+        # Deduplicate: skip actions that would set a value to what it already is
+        # This prevents the "raise confidence to 80% when it's already 80%" loop
+        filtered = []
+        for action in actions:
+            if action.action_type == "runtime_config_change" and action.config_key and action.config_value is not None:
+                current = getattr(config, {
+                    "min_to_trade": "MIN_CONFIDENCE_SCORE",
+                    "trailing_stop_trail_atr": "TRAILING_STOP_TRAIL_ATR",
+                    "trailing_stop_activation_atr": "TRAILING_STOP_ACTIVATION_ATR",
+                    "stop_loss_atr_multiplier": "STOP_LOSS_ATR_MULTIPLIER",
+                    "take_profit_ratio": "TAKE_PROFIT_RATIO",
+                    "per_trade_risk_pct": "PER_TRADE_RISK_PCT",
+                    "hold_overnight_threshold": "HOLD_OVERNIGHT_THRESHOLD",
+                }.get(action.config_key, ""), None)
+                if current is not None and abs(float(current) - float(action.config_value)) < 0.01:
+                    logger.debug(f"Skipping duplicate action: {action.title} (already at {current})")
+                    continue
+            filtered.append(action)
+        actions = filtered
+
+        if not actions:
             return
 
         now = datetime.now(timezone.utc)

@@ -12,7 +12,7 @@ trading:
   - NZD_USD
   enable_streaming: true
   streaming_pl_alert_threshold: 5.0
-  scan_interval_minutes: 5
+  scan_interval_minutes: 180
   max_open_positions: 0
   per_trade_risk_pct: 2.0
   max_per_trade_spend: 10.0
@@ -31,7 +31,7 @@ trading:
   htf_conflict_penalty: 15
 confidence:
   aggressiveness_label: conservative
-  min_to_trade: 80
+  min_to_trade: 85
   hold_overnight_threshold: 65
   weights:
     lstm_model: 50
@@ -43,26 +43,26 @@ risk:
   confidence_tiers:
     low:
       risk_pct: 1.0
-      stop_loss_atr_multiplier: 2.0
-      take_profit_ratio: 1.5
-      trailing_stop_activation_atr: 2.0
-      trailing_stop_trail_atr: 1.2
+      stop_loss_atr_multiplier: 2.5
+      take_profit_ratio: 2.0
+      trailing_stop_activation_atr: 2.5
+      trailing_stop_trail_atr: 1.5
     medium:
       risk_pct: 2.0
-      stop_loss_atr_multiplier: 1.5
+      stop_loss_atr_multiplier: 2.0
       take_profit_ratio: 2.0
-      trailing_stop_activation_atr: 1.5
-      trailing_stop_trail_atr: 1.0
+      trailing_stop_activation_atr: 2.0
+      trailing_stop_trail_atr: 1.5
     high:
-      risk_pct: 3.0
-      stop_loss_atr_multiplier: 1.2
-      take_profit_ratio: 3.0
-      trailing_stop_activation_atr: 1.0
-      trailing_stop_trail_atr: 0.8
+      risk_pct: 2.0
+      stop_loss_atr_multiplier: 2.0
+      take_profit_ratio: 2.5
+      trailing_stop_activation_atr: 2.0
+      trailing_stop_trail_atr: 1.5
   partial_tp_enabled: true
   partial_tp_pct: 50
   partial_close_pct: 50
-  stop_loss_atr_multiplier: 1.5
+  stop_loss_atr_multiplier: 2.0
   take_profit_ratio: 2.0
   daily_loss_circuit_breaker_pct: 10.0
   trailing_stop_activation_atr: 2.0

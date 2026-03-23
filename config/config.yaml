@@ -1,366 +1,124 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Joseph's Forex Bot - Trading Configuration
-#
-# Edit this file to customise how the bot trades.
-# All settings have clear explanations so you know exactly what each one does.
-# ─────────────────────────────────────────────────────────────────────────────
-
 trading:
-  # Which currency pairs to trade
-  # These are the most liquid major pairs with the tightest spreads
   pairs:
-    - EUR_USD    # Euro / US Dollar (highest volume in the world)
-    - GBP_USD    # British Pound / US Dollar (volatile, good for day trading)
-    - USD_JPY    # US Dollar / Japanese Yen (very liquid)
-    - AUD_USD    # Australian Dollar / US Dollar
-    - USD_CAD    # US Dollar / Canadian Dollar
-    - USD_CHF    # US Dollar / Swiss Franc
-    - GBP_JPY   # British Pound / Japanese Yen (volatile cross)
-    - EUR_GBP    # Euro / British Pound
-    - EUR_JPY    # Euro / Japanese Yen
-    - NZD_USD    # New Zealand Dollar / US Dollar
-
-  # ── Real-Time Position Monitoring (BACKLOG-004/GH#6) ───────────────────────
-  # When enabled, the bot streams position updates via IG Lightstreamer instead
-  # of polling /positions every 5 minutes. This gives sub-second visibility into
-  # P&L changes, stop-loss triggers, and trailing stop adjustments.
-  # Falls back to REST polling if Lightstreamer connection fails.
+  - EUR_USD
+  - GBP_USD
+  - USD_JPY
+  - AUD_USD
+  - USD_CAD
+  - USD_CHF
+  - GBP_JPY
+  - EUR_GBP
+  - EUR_JPY
+  - NZD_USD
   enable_streaming: true
-
-  # P&L change threshold (in GBP) to trigger a Telegram alert
-  # Prevents spamming on tiny fluctuations — only notifies on significant moves
   streaming_pl_alert_threshold: 5.0
-
-  # How often to scan the market for new trade signals (in minutes)
-  # Lower = more frequent checks but higher API usage
-  # 5 min is the safe minimum with 10 pairs on H1 + H4 caching
-  # Budget: ~8,300 points/week vs 10,000 limit
   scan_interval_minutes: 5
-
-  # Maximum number of positions open at the same time
-  # Keeping this low reduces overall risk exposure
-  # Set to 0 for unlimited positions (learning/demo mode)
   max_open_positions: 0
-
-  # Risk per trade as a percentage of your total capital
-  # Example: 2% of £500 = £10 maximum loss per trade
   per_trade_risk_pct: 2.0
-
-  # Hard cap on maximum loss per trade in GBP
-  # Overrides per_trade_risk_pct if the percentage calculation would exceed this amount
   max_per_trade_spend: 10.0
-
-  # Candlestick timeframe for analysis
-  # Options: M5 (5min), M15 (15min), H1 (1hour), H4 (4hour)
   timeframe: H1
-
-  # ── Session-Aware Trading (BACKLOG-006) ────────────────────────────────────
-  # Adjusts the minimum confidence threshold based on the current trading session.
-  # During low-activity sessions (Sydney/Tokyo for most pairs), the bar is raised
-  # so only the strongest signals get through. During peak sessions (London/NY
-  # overlap), the standard threshold applies.
-  #
-  # Set to 0 to disable session adjustments entirely.
   session_confidence_boost:
-    overlap:  -5     # London/NY overlap: best conditions, slightly lower bar
-    london:    0     # London: standard threshold
-    new_york:  0     # New York: standard threshold
-    tokyo:     10    # Tokyo: raise bar by 10 (except JPY pairs)
-    sydney:    15    # Sydney: quietest session, raise bar by 15
-
-  # JPY pairs are exempt from Tokyo session penalty (they're most active then)
+    overlap: -5
+    london: 0
+    new_york: 0
+    tokyo: 10
+    sydney: 15
   session_jpy_exempt_from_tokyo: true
-
-  # Number of historical candles to analyse for each signal
   lookback_candles: 60
-
-  # ── Multi-Timeframe Analysis (BACKLOG-004) ────────────────────────────────
-  # The bot checks a higher timeframe for trend confirmation before trading.
-  # If the higher TF trend opposes the entry signal, confidence is reduced.
-  # If it aligns, confidence gets a boost. Set to "none" to disable.
-  htf_timeframe: H4             # Higher timeframe for trend backdrop
-  htf_lookback_candles: 60      # Candles to fetch on the higher timeframe
-  htf_alignment_bonus: 10       # Confidence boost when HTF aligns with signal
-  htf_conflict_penalty: 15      # Confidence penalty when HTF opposes signal
-
+  htf_timeframe: H4
+  htf_lookback_candles: 60
+  htf_alignment_bonus: 10
+  htf_conflict_penalty: 15
 confidence:
-  # ── Aggressiveness vs Risk Factor — what's the difference? ───────────────
-  #
-  # AGGRESSIVENESS controls how often the bot trades.
-  #   Lower min_confidence = bot trades more often (more aggressive)
-  #   Higher min_confidence = bot trades less often (more conservative)
-  #   Think of it as: how fast you're willing to drive.
-  #
-  # RISK FACTOR controls how much you lose when a trade goes wrong.
-  #   This is the per_trade_risk_pct setting in the [risk] section below.
-  #   Think of it as: your seatbelt. Limits damage when things go wrong.
-  #
-  # They are INDEPENDENT. You can be aggressive (low threshold) but safe
-  # (low risk %), or conservative (high threshold) but bold (high risk %).
-  # For month one, we recommend: aggressiveness=MEDIUM, risk=LOW.
-  # ─────────────────────────────────────────────────────────────────────────
-
-  # AGGRESSIVENESS presets (choose one by setting min_to_trade):
-  #   Conservative:  70  — fewer trades, only high-quality signals
-  #   Medium:        60  — balanced (recommended for month one)
-  #   Aggressive:    50  — more trades, accepts weaker signals
-  #   Very Aggressive: 40 — maximum trades (not recommended until proven)
-  aggressiveness_label: "conservative"  # For your reference only — doesn't affect logic
-
-  # Minimum score (0-100) to open a trade
-  # Below this, the bot does nothing — better to miss a trade than lose money
-  min_to_trade: 85
-
-  # Score required to hold a position past end-of-day close
-  # This is intentionally very high — overnight holds should be rare
+  aggressiveness_label: conservative
+  min_to_trade: 80
   hold_overnight_threshold: 65
-
-  # Weighting of each component in the final confidence score
-  # All weights must add up to 100
   weights:
-    lstm_model: 50          # AI neural network prediction
-    macd_rsi_consensus: 20  # MACD and RSI agreement
-    ema_trend_alignment: 15 # Short/long EMA trend direction
-    bollinger_position: 10  # Price position relative to Bollinger Bands
-    volume_confirmation: 5  # Volume validates the signal
-
+    lstm_model: 50
+    macd_rsi_consensus: 20
+    ema_trend_alignment: 15
+    bollinger_position: 10
+    volume_confirmation: 5
 risk:
-  # ── Confidence-Tiered Risk Parameters ────────────────────────────────────
-  # Risk parameters scale with confidence score. Low-confidence trades play
-  # defensive (smaller size, wider stops, modest targets). High-confidence
-  # trades lean in (bigger size, tighter stops, let winners run).
-  #
-  # Tiers: low (50-65%), medium (66-80%), high (81%+)
-  # Each tier overrides the base values below.
   confidence_tiers:
-    low:       # 50-65% confidence — defensive
-      risk_pct: 1.0                    # Risk 1% of capital (£5 on £500)
-      stop_loss_atr_multiplier: 2.0    # Wider stop — room to breathe
-      take_profit_ratio: 1.5           # Modest 1.5:1 reward
+    low:
+      risk_pct: 1.0
+      stop_loss_atr_multiplier: 2.0
+      take_profit_ratio: 1.5
       trailing_stop_activation_atr: 2.0
       trailing_stop_trail_atr: 1.2
-    medium:    # 66-80% confidence — balanced
-      risk_pct: 2.0                    # Risk 2% of capital (£10 on £500)
-      stop_loss_atr_multiplier: 1.5    # Standard stop
-      take_profit_ratio: 2.0           # 2:1 reward
+    medium:
+      risk_pct: 2.0
+      stop_loss_atr_multiplier: 1.5
+      take_profit_ratio: 2.0
       trailing_stop_activation_atr: 1.5
       trailing_stop_trail_atr: 1.0
-    high:      # 81%+ confidence — aggressive
-      risk_pct: 3.0                    # Risk 3% of capital (£15 on £500)
-      stop_loss_atr_multiplier: 1.2    # Tighter stop — high conviction
-      take_profit_ratio: 3.0           # 3:1 reward — let winners run
+    high:
+      risk_pct: 3.0
+      stop_loss_atr_multiplier: 1.2
+      take_profit_ratio: 3.0
       trailing_stop_activation_atr: 1.0
       trailing_stop_trail_atr: 0.8
-
-  # ── Partial Profit-Taking ────────────────────────────────────────────────
-  # When price reaches partial_tp_pct of the take-profit distance, close
-  # partial_close_pct of the position to bank profit. The rest rides with
-  # a trailing stop. Set partial_tp_enabled to false to disable.
   partial_tp_enabled: true
-  partial_tp_pct: 50             # Take partial profit at 50% of TP distance
-  partial_close_pct: 50          # Close 50% of the position
-
-  # ── Base risk values (used as fallback if tiers aren't configured) ───────
+  partial_tp_pct: 50
+  partial_close_pct: 50
   stop_loss_atr_multiplier: 1.5
   take_profit_ratio: 2.0
-
-  # If the account loses this % in a single day, pause trading for 24 hours
-  # This prevents a bad day from becoming a catastrophe
   daily_loss_circuit_breaker_pct: 10.0
-
-  # ── Trailing Stop-Loss (BACKLOG-007) ──────────────────────────────────────
-  # Base values — overridden by confidence tier when tiered risk is active.
-  # Once a position reaches activation_atr_multiple × ATR in profit,
-  # the stop-loss trails behind the price at trail_atr_multiple × ATR.
-  # This locks in profit while letting winners run.
-  trailing_stop_activation_atr: 2.0   # Activate trailing stop after 2.0×ATR profit (was 1.5 — too early, caused breakeven closes)
-  trailing_stop_trail_atr: 1.5        # Trail distance: 1.5×ATR behind current price (was 1.0 — too tight, normal retracements hit stop)
-
-  # ── Correlation Block (BACKLOG-005) ─────────────────────────────────────
-  # If we already hold a position in a highly correlated pair, block the new trade.
-  # This prevents doubling up on effectively the same bet (e.g. long EUR_USD + long GBP_USD).
-  # Threshold: absolute correlation >= this value triggers the block.
+  trailing_stop_activation_atr: 2.0
+  trailing_stop_trail_atr: 1.5
   correlation_block_threshold: 0.75
-
-  # When holding overnight, tighten stop-loss to protect this % of profit
   overnight_profit_protection_pct: 50.0
-
 schedule:
-  # Time (UTC) to close all positions at end of day
-  eod_close_time: "23:59"
-
-  # Time (UTC) to run the overnight hold evaluation (98% rule check)
-  eod_evaluation_time: "23:45"
-
-  # Time (UTC) to send the daily Telegram report
-  daily_report_time: "00:05"
-
-  # Day and time (UTC) to send the weekly Telegram report
-  weekly_report_day: "sunday"
-  weekly_report_time: "20:00"
-
-  # Day and time (UTC) to run the weekly market outlook analysis
-  weekly_analysis_day: "sunday"
-  weekly_analysis_time: "19:00"
-
+  eod_close_time: '23:59'
+  eod_evaluation_time: '23:45'
+  daily_report_time: 00:05
+  weekly_report_day: sunday
+  weekly_report_time: '20:00'
+  weekly_analysis_day: sunday
+  weekly_analysis_time: '19:00'
 mcp:
-  # Which analysis modules to run before each trade decision
-  # Set to false to disable any module (useful for troubleshooting)
   enable_economic_calendar: true
   enable_sentiment_analysis: true
   enable_correlation_analysis: true
   enable_volatility_regime: true
   enable_session_stats: true
-  enable_client_sentiment: true   # IG retail client positioning — contrarian indicator
-  enable_fred_macro: true         # FRED interest rate differentials — carry trade bias
-  enable_myfxbook_sentiment: true # Myfxbook community sentiment — secondary contrarian signal
-  enable_cot_positioning: true    # CFTC COT institutional positioning — directional filter
-
-  # How long to cache MCP analysis results (minutes)
-  # Avoids re-fetching data on every single scan
+  enable_client_sentiment: true
+  enable_fred_macro: true
+  enable_myfxbook_sentiment: true
+  enable_cot_positioning: true
   cache_duration_minutes: 30
-
-  # Claude model to use for intelligent market analysis
-  claude_model: "claude-sonnet-4-20250514"
-
-  # Maximum tokens for Claude's analysis response
+  claude_model: claude-sonnet-4-20250514
   max_analysis_tokens: 1000
-
 lstm:
-  # Whether the LSTM model is enabled for predictions
-  # Set to false to disable ML scoring and rely on indicators only
   enabled: true
-
-  # ── Continuous Training ────────────────────────────────────────────────────
-  # The LSTM retrains automatically throughout the day on a rolling interval.
-  # Start conservative (240 min = 4 hours) and tighten as we learn how fast
-  # training runs on the hardware. The goal is to approach real-time retraining.
-  #
-  # Set retrain_interval_minutes to 0 to disable auto-retrain entirely.
   retrain_interval_minutes: 240
-
-  # ── Shadow Mode ────────────────────────────────────────────────────────────
-  # When true, every scan logs LSTM-enhanced vs indicator-only confidence
-  # scores side by side, WITHOUT the LSTM score affecting actual trades.
-  # Use this to validate the model before letting it influence real decisions.
-  #
-  # Shadow mode flow:
-  #   1. Calculate confidence WITH LSTM prediction  → logged as "lstm_score"
-  #   2. Calculate confidence WITHOUT LSTM (None)   → logged as "indicator_score"
-  #   3. Only the indicator_score is used for trade decisions
-  #   4. Both scores are logged + sent to Telegram for comparison
-  #
-  # Once you're happy the LSTM is adding value, set shadow_mode to false
-  # and the LSTM score will drive real trade decisions (50% weight).
   shadow_mode: false
-
-  # ── Model Architecture ────────────────────────────────────────────────────
-  # Two-layer LSTM with self-attention. Bigger hidden_size and more layers
-  # capture more complex patterns but train slower. These defaults (~100k params)
-  # still train in under 3 minutes on CPU.
-  hidden_size: 96               # LSTM hidden units per layer (was 64, increased for attention)
-  num_layers: 2                 # LSTM layers (2 = captures longer-term patterns)
-  dropout: 0.3                  # Regularisation dropout rate (between layers + before classifier)
-
-  # Training hyperparameters — tuned for forex H1 data
-  epochs: 50                    # Max training epochs (early stopping usually kicks in sooner)
-  batch_size: 64                # Samples per gradient update
-  learning_rate: 0.001          # Adam optimizer learning rate (halved automatically on plateau)
-  patience: 7                   # Stop if val loss doesn't improve for this many epochs
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Automated Remediation System
-#
-# The integrity monitor detects trading problems and recommends fixes via
-# Telegram inline buttons. These thresholds control when alerts fire.
-# ─────────────────────────────────────────────────────────────────────────────
-
+  hidden_size: 96
+  num_layers: 2
+  dropout: 0.3
+  epochs: 50
+  batch_size: 64
+  learning_rate: 0.001
+  patience: 7
 remediation:
-  # Auto-approve: when true, the bot applies ALL remediation recommendations
-  # automatically without waiting for you to tap Approve. It notifies you of
-  # what it changed via Telegram. Set to false if you want manual control.
   auto_approve: true
-
-  # How many hours to wait after a fix before reviewing whether it helped.
-  # If no improvement, the system escalates: L1 (tighten), L2 (disable), L3 (pause)
   review_delay_hours: 4
-
-  # If weekly P&L drops below this, auto-pause trading (no approval needed)
   autopause_weekly_loss_threshold: -50
-
-  # Alert when BUY or SELL win rate drops below this % over 7 days
-  # Recommends disabling that direction via inline button
   direction_winrate_alert_threshold: 30
-
-  # Lowest the auto-optimiser will drop confidence to (won't go below this)
-  # If 85% produces no trades, it drops by 5% every 24h until it hits this floor
   min_confidence_floor: 70
-
-  # Minimum consecutive losses before smart streak analysis kicks in
-  # Analyses whether losses are concentrated in one direction, pair, etc.
   losing_streak_smart_analysis_min: 5
-
 data:
-  # Number of days of historical data to fetch on first startup
   initial_history_days: 30
-
-  # Where to store data files (mapped to ./data folder via Docker volume)
-  local_data_dir: "/app/data"
-
-  # How many days of trade history to keep in local storage
+  local_data_dir: /app/data
   trade_history_retention_days: 365
-
 notifications:
-  # Session timing info for context in notifications (your local timezone)
-  timezone: "Europe/London"
-
-  # Include confidence score breakdown in trade notifications
+  timezone: Europe/London
   show_confidence_breakdown: true
-
-  # Include reasoning explanation in trade notifications
   show_ai_reasoning: true
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Multi-Instance Configuration
-#
-# This section future-proofs the bot for running multiple instances.
-# Right now you only have one instance — leave instance_id as "primary"
-# and active as true. Everything works exactly as before.
-#
-# When you're ready to add a second instance on another machine:
-#   1. Copy this entire project to the new machine
-#   2. Set instance_id to "secondary" on the new machine
-#   3. Change the pairs list to the pairs you want that instance to trade
-#   4. Both instances can share the same IG account safely —
-#      they each own different pairs so there's no overlap or double-trading
-#
-# Example split:
-#   Instance 1 (primary):   EUR_USD, GBP_USD, USD_CHF
-#   Instance 2 (secondary): USD_JPY, AUD_USD, USD_CAD
-#
-# The coordination_mode setting controls how instances interact:
-#   "independent" — each instance trades its own pairs, no cross-talk (default)
-#   "failover"    — secondary only activates if primary goes offline
-# ─────────────────────────────────────────────────────────────────────────────
-
 instance:
-  # Unique name for this instance — shown in Telegram messages and logs
-  # Options: "primary", "secondary", or any name you choose e.g. "london", "us"
-  instance_id: "primary"
-
-  # Whether this instance is actively trading
-  # Set to false to pause trading without stopping the container
+  instance_id: primary
   active: true
-
-  # How multiple instances coordinate (only matters when running 2+)
-  # "independent" = each trades its own pairs, no communication needed
-  # "failover"    = secondary monitors primary and takes over if it goes offline
-  coordination_mode: "independent"
-
-  # Failover settings (only used when coordination_mode = "failover")
-  # How many seconds of silence before standby declares primary offline
+  coordination_mode: independent
   failover_timeout_seconds: 120
-
-  # Heartbeat — how often this instance writes a "I'm alive" signal (seconds)
-  # Used by standby instances to detect if primary has gone offline
   heartbeat_interval_seconds: 30

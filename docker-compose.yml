@@ -88,12 +88,13 @@ services:
       - MCP_SERVER_URL=http://mcp-server:8090
       - DB_PATH=/app/data_store/trader.db
       - CONFIG_PATH=/app/config/config.yaml
-      - WIKI_REPO_URL=https://github.com/joegooderham/ai-trader-bot.wiki.git
       - BOT_COMMAND_URL=http://forex-bot:8060
       - DASHBOARD_CMD_TOKEN=${DASHBOARD_CMD_TOKEN}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DOCS_DIR=/app/docs
     volumes:
       - ./data_store:/app/data_store:ro
+      - ./docs:/app/docs:ro
       - ./config:/app/config:ro
     ports:
       - "8050:8050"

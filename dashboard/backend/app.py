@@ -17,8 +17,6 @@ works both on the same Docker network and across the internet.
 
 import os
 import sqlite3
-import subprocess
-import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -41,12 +39,9 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://mcp-server:8090")
 # SQLite database path — mounted volume from the trading bot
 DB_PATH = os.getenv("DB_PATH", "/app/data_store/trader.db")
 
-# Wiki repo URL and local clone path
-WIKI_REPO_URL = os.getenv("WIKI_REPO_URL", "https://github.com/joegooderham/ai-trader-bot.wiki.git")
-WIKI_DIR = Path(os.getenv("WIKI_DIR", "/app/wiki"))
-
-# How often to pull wiki updates (seconds)
-WIKI_PULL_INTERVAL = int(os.getenv("WIKI_PULL_INTERVAL", "1800"))  # 30 min
+# Docs directory — reads from the main repo's docs/ folder (single source of truth)
+# Mounted as a read-only volume from the host's docs/ directory
+DOCS_DIR = Path(os.getenv("DOCS_DIR", "/app/docs"))
 
 # Path to built React frontend static files
 STATIC_DIR = Path(os.getenv("STATIC_DIR", "/app/frontend/dist"))
@@ -158,53 +153,13 @@ async def bot_cmd(endpoint: str, method: str = "POST", body: dict = None) -> dic
 # ── Wiki Management ─────────────────────────────────────────────────────────
 
 
-def clone_or_pull_wiki():
-    """Clone the wiki repo if not present, otherwise pull latest."""
-    try:
-        if (WIKI_DIR / ".git").exists():
-            result = subprocess.run(
-                ["git", "pull", "--ff-only"],
-                cwd=str(WIKI_DIR),
-                capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode == 0:
-                logger.debug("Wiki pulled successfully")
-            else:
-                logger.warning(f"Wiki pull failed: {result.stderr}")
-        else:
-            WIKI_DIR.parent.mkdir(parents=True, exist_ok=True)
-            result = subprocess.run(
-                ["git", "clone", WIKI_REPO_URL, str(WIKI_DIR)],
-                capture_output=True, text=True, timeout=60,
-            )
-            if result.returncode == 0:
-                logger.info("Wiki cloned successfully")
-            else:
-                logger.warning(f"Wiki clone failed: {result.stderr}")
-    except Exception as e:
-        logger.warning(f"Wiki sync error: {e}")
-
-
-def wiki_pull_loop():
-    """Background thread that periodically pulls wiki updates."""
-    while True:
-        time.sleep(WIKI_PULL_INTERVAL)
-        clone_or_pull_wiki()
-
-
 # ── Startup ──────────────────────────────────────────────────────────────────
 
 
 @app.on_event("startup")
 async def startup():
-    """Clone wiki and start background pull thread on startup."""
-    # Clone wiki in background so startup isn't blocked
-    threading.Thread(target=clone_or_pull_wiki, daemon=True).start()
-
-    # Start periodic wiki pull
-    threading.Thread(target=wiki_pull_loop, daemon=True).start()
-
-    logger.info(f"Dashboard API started — MCP: {MCP_SERVER_URL}, DB: {DB_PATH}")
+    """Log startup info."""
+    logger.info(f"Dashboard API started — MCP: {MCP_SERVER_URL}, DB: {DB_PATH}, Docs: {DOCS_DIR}")
 
 
 # ── API Routes: Overview ────────────────────────────────────────────────────
@@ -724,14 +679,16 @@ async def get_pl_history(days: int = 30):
 
 @app.get("/api/wiki")
 async def list_wiki_pages():
-    """List all wiki pages."""
-    if not WIKI_DIR.exists():
-        return {"pages": [], "error": "Wiki not cloned yet"}
+    """List all documentation pages from the docs/ directory.
+    Single source of truth — reads directly from the repo's docs/ folder."""
+    if not DOCS_DIR.exists():
+        return {"pages": [], "error": "Docs directory not mounted"}
 
     pages = []
-    for f in sorted(WIKI_DIR.glob("*.md")):
+    for f in sorted(DOCS_DIR.glob("*.md")):
+        if f.name == "README.md":
+            continue  # Skip the directory index
         name = f.stem
-        # Read first line for title
         try:
             first_line = f.read_text(encoding="utf-8", errors="replace").split("\n")[0]
             title = first_line.lstrip("# ").strip()
@@ -744,17 +701,16 @@ async def list_wiki_pages():
 
 @app.get("/api/wiki/{page_name}")
 async def get_wiki_page(page_name: str):
-    """Get a single wiki page rendered as HTML."""
-    # Sanitise page name — prevent path traversal
+    """Get a single doc page rendered as HTML.
+    Reads from docs/ directory — single source of truth with the repo."""
     safe_name = page_name.replace("/", "").replace("\\", "").replace("..", "")
-    wiki_file = WIKI_DIR / f"{safe_name}.md"
+    doc_file = DOCS_DIR / f"{safe_name}.md"
 
-    if not wiki_file.exists():
-        raise HTTPException(status_code=404, detail=f"Wiki page '{safe_name}' not found")
+    if not doc_file.exists():
+        raise HTTPException(status_code=404, detail=f"Page '{safe_name}' not found")
 
-    raw_md = wiki_file.read_text(encoding="utf-8", errors="replace")
+    raw_md = doc_file.read_text(encoding="utf-8", errors="replace")
 
-    # Convert markdown to HTML with tables and fenced code support
     html = markdown.markdown(
         raw_md,
         extensions=["tables", "fenced_code", "toc", "nl2br"],

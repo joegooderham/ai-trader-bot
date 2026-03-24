@@ -233,9 +233,20 @@ def scan_markets():
         logger.debug(f"Instance {config.INSTANCE_ID} is not active — skipping scan")
         return
 
+    # Auto-resume: if trading was paused by daily profit target, resume
+    # at the start of a new trading day (after EOD close at 23:59)
+    global _trading_paused, _paused_reason
+    if _trading_paused and getattr(scan_markets, '_profit_target_date', None):
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if today != scan_markets._profit_target_date:
+            _trading_paused = False
+            scan_markets._profit_target_date = None
+            logger.info("Trading auto-resumed — new trading day")
+            notifier._send_system("*▶️ Trading auto-resumed* — new trading day started.")
+
     # Manual pause: user can pause trading via /pause Telegram command
     if _trading_paused:
-        logger.info("Trading paused via Telegram — skipping market scan")
+        logger.info("Trading paused — skipping market scan")
         return
 
     # Circuit breaker: pause all trading if daily drawdown exceeds threshold
@@ -613,8 +624,81 @@ def monitor_positions():
     This is the fallback for when Lightstreamer streaming is unavailable.
     When streaming IS active, this still runs as a safety net to catch
     any updates that might have been missed and to apply trailing stops.
+
+    Also checks daily profit target — if total P&L for the day hits the
+    target, closes everything and pauses trading for the rest of the day.
     """
     open_trades = broker.get_open_trades()
+
+    # ── Daily Profit Target ──────────────────────────────────────────────
+    # If today's realised + unrealised P&L hits the target, bank it all.
+    # Close everything and pause until tomorrow's first scan.
+    daily_target = config._cfg.get("risk", {}).get("daily_profit_target", 0)
+    if daily_target > 0 and not _trading_paused:
+        try:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today_trades = storage.get_trades_for_date(today)
+            realised_pl = sum(t.get("pl", 0) for t in today_trades if t.get("closed_at"))
+            unrealised_pl = sum(float(t.get("unrealizedPL", 0)) for t in (open_trades or []))
+            total_pl = realised_pl + unrealised_pl
+
+            if total_pl >= daily_target:
+                logger.info(f"DAILY PROFIT TARGET HIT: £{total_pl:.2f} >= £{daily_target} — banking profits")
+
+                # Close all open positions
+                results = broker.close_all_positions()
+                balance = 0
+                try:
+                    balance = broker.get_account_balance()
+                except Exception:
+                    pass
+
+                banked_pl = 0
+                for r in results:
+                    deal_id = r.get("deal_id")
+                    pl = r.get("pl", 0)
+                    banked_pl += pl
+                    if deal_id:
+                        storage.update_trade(deal_id, {
+                            "close_price": r.get("close_price"),
+                            "pl": pl,
+                            "closed_at": r.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                            "close_reason": f"Daily profit target (£{daily_target})",
+                            "status": "CLOSED",
+                        })
+                        trade_num = storage.get_trade_number(deal_id)
+                        notifier.trade_closed(
+                            pair=r.get("pair", "Unknown"),
+                            direction="N/A",
+                            close_price=r.get("close_price", 0),
+                            pl=pl,
+                            reason=f"Daily profit target (£{daily_target})",
+                            account_balance=balance,
+                            trade_number=trade_num,
+                        )
+
+                # Pause trading for the rest of the day — auto-resumes tomorrow
+                global _trading_paused
+                _trading_paused = True
+                scan_markets._profit_target_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+                notifier._send_system(
+                    f"*💰 DAILY PROFIT TARGET HIT — BANKED*\n"
+                    f"═════════════════════\n"
+                    f"*Realised today:* +£{realised_pl:.2f}\n"
+                    f"*Just closed:* +£{banked_pl:.2f}\n"
+                    f"*Total:* +£{total_pl:.2f}\n"
+                    f"*Target:* £{daily_target}\n"
+                    f"─────────────────────\n"
+                    f"All positions closed. Trading paused until tomorrow.\n"
+                    f"_Use /resume to restart early if needed._\n"
+                    f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+                )
+
+                return  # Don't continue monitoring — everything is closed
+        except Exception as e:
+            logger.error(f"Daily profit target check failed: {e}")
+
     if not open_trades:
         return
 

@@ -235,7 +235,7 @@ def scan_markets():
 
     # Auto-resume: if trading was paused by daily profit target, resume
     # at the start of a new trading day (after EOD close at 23:59)
-    global _trading_paused, _paused_reason
+    global _trading_paused
     if _trading_paused and getattr(scan_markets, '_profit_target_date', None):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != scan_markets._profit_target_date:
@@ -628,6 +628,8 @@ def monitor_positions():
     Also checks daily profit target — if total P&L for the day hits the
     target, closes everything and pauses trading for the rest of the day.
     """
+    global _trading_paused
+
     open_trades = broker.get_open_trades()
 
     # ── Daily Profit Target ──────────────────────────────────────────────
@@ -678,7 +680,6 @@ def monitor_positions():
                         )
 
                 # Pause trading for the rest of the day — auto-resumes tomorrow
-                global _trading_paused
                 _trading_paused = True
                 scan_markets._profit_target_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 

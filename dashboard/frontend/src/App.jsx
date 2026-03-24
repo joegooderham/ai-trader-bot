@@ -20,6 +20,7 @@ import Correlations from './pages/Correlations'
 import RiskExposure from './pages/RiskExposure'
 import ScanLog from './pages/ScanLog'
 import Calendar from './pages/Calendar'
+import Benchmark from './pages/Benchmark'
 
 export default function App() {
   return (
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="/journal" element={<TradeJournal />} />
         <Route path="/scan-log" element={<ScanLog />} />
         <Route path="/calendar" element={<Calendar />} />
+        <Route path="/benchmark" element={<Benchmark />} />
         <Route path="/summary" element={<Summary />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/heatmap" element={<Heatmap />} />

@@ -23,6 +23,7 @@ const navGroups = [
       { to: '/sessions', label: 'Sessions' },
       { to: '/correlations', label: 'Correlations' },
       { to: '/risk', label: 'Risk Exposure' },
+      { to: '/benchmark', label: 'Benchmark' },
     ],
   },
   {

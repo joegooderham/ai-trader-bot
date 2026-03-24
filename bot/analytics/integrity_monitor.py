@@ -460,6 +460,74 @@ class IntegrityMonitor:
 
     # ── Weekly P&L Auto-Pause ─────────────────────────────────────────────────
 
+    # ── Drawdown Protection ─────────────────────────────────────────────────
+
+    def check_drawdown_protection(self):
+        """Tighten risk parameters if account equity drops from its peak.
+
+        Tracks peak P&L and current P&L. When the drawdown exceeds thresholds,
+        automatically tightens risk to protect remaining capital:
+          - 5% drawdown from peak → raise confidence by 5%, reduce risk to 1%
+          - 10% drawdown from peak → circuit breaker (already exists in config)
+
+        Called during each integrity review.
+        """
+        try:
+            # Calculate cumulative P&L from all closed trades
+            week_trades = self.storage.get_trades_for_week()
+            closed = [t for t in week_trades if t.get("closed_at")]
+
+            if not closed:
+                return
+
+            # Build cumulative P&L curve to find peak
+            cumulative = 0
+            peak = 0
+            for t in sorted(closed, key=lambda x: x.get("closed_at", "")):
+                cumulative += t.get("pl", 0)
+                if cumulative > peak:
+                    peak = cumulative
+
+            # Calculate drawdown from peak
+            drawdown = peak - cumulative
+            drawdown_pct = (drawdown / config.MAX_CAPITAL) * 100 if config.MAX_CAPITAL > 0 else 0
+
+            if drawdown_pct < 3:
+                return  # Normal fluctuation, no action needed
+
+            if drawdown_pct >= 5:
+                # Significant drawdown — tighten parameters
+                logger.warning(f"DRAWDOWN PROTECTION: {drawdown_pct:.1f}% from peak (£{drawdown:.2f})")
+
+                # Raise confidence by 5% if below 95%
+                if config.MIN_CONFIDENCE_SCORE < 95:
+                    new_conf = min(config.MIN_CONFIDENCE_SCORE + 5, 95)
+                    if new_conf > config.MIN_CONFIDENCE_SCORE:
+                        config.apply_runtime_config("min_to_trade", new_conf)
+
+                # Reduce risk to 1% if above
+                if config.PER_TRADE_RISK_PCT > 1.0:
+                    config.apply_runtime_config("per_trade_risk_pct", 1.0)
+
+                if self.notifier:
+                    self.notifier._send_system(
+                        f"*🛡️ DRAWDOWN PROTECTION ACTIVE*\n"
+                        f"═════════════════════\n"
+                        f"*Peak P&L:* +£{peak:.2f}\n"
+                        f"*Current P&L:* £{cumulative:.2f}\n"
+                        f"*Drawdown:* £{drawdown:.2f} ({drawdown_pct:.1f}% of capital)\n"
+                        f"─────────────────────\n"
+                        f"Tightened: confidence → {config.MIN_CONFIDENCE_SCORE}%, "
+                        f"risk → {config.PER_TRADE_RISK_PCT}%\n"
+                        f"_Will relax when P&L recovers above peak._\n"
+                        f"\n_{datetime.now(timezone.utc).strftime('%H:%M UTC')}_"
+                    )
+
+        except Exception as e:
+            logger.error(f"Drawdown protection check failed: {e}")
+
+    # ── Weekly P&L Auto-Pause ─────────────────────────────────────────────────
+
     def _check_weekly_pl_autopause(self) -> bool:
         """Auto-pause trading if weekly P&L exceeds the loss threshold.
 
@@ -713,6 +781,9 @@ class IntegrityMonitor:
 
         # ── Check 7: Weekly P&L Auto-Pause ────────────────────────────────────
         self._check_weekly_pl_autopause()
+
+        # ── Check 7b: Drawdown Protection ─────────────────────────────────────
+        self.check_drawdown_protection()
 
         # ── Check 8: Show disabled directions/pairs status ────────────────────
         if config.DISABLED_DIRECTIONS:

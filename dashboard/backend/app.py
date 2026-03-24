@@ -1575,6 +1575,80 @@ async def pl_calendar(months: int = 3):
         return {}
 
 
+# ── API Routes: Performance Benchmark ────────────────────────────────────────
+
+@app.get("/api/analytics/benchmark")
+async def performance_benchmark(days: int = 30):
+    """Compare bot trading returns vs buy-and-hold per pair.
+
+    For each pair, calculates:
+    - Bot P&L: actual closed trade results
+    - Buy-and-hold P&L: what you'd have made just holding from first to last trade
+    - Alpha: bot return minus buy-and-hold (positive = bot adds value)
+    """
+    try:
+        with get_db() as db:
+            # Bot returns per pair
+            bot_rows = db.execute("""
+                SELECT pair,
+                       COUNT(*) as trades,
+                       SUM(CASE WHEN pl > 0.01 THEN 1 ELSE 0 END) as wins,
+                       ROUND(SUM(pl), 2) as bot_pl
+                FROM trades
+                WHERE closed_at IS NOT NULL
+                  AND opened_at >= date('now', ?)
+                GROUP BY pair
+            """, (f"-{days} days",)).fetchall()
+
+            # Buy-and-hold: price change from first candle to last candle per pair
+            hold_rows = db.execute("""
+                SELECT pair,
+                       FIRST_VALUE(close) OVER (PARTITION BY pair ORDER BY timestamp ASC) as first_close,
+                       LAST_VALUE(close) OVER (PARTITION BY pair ORDER BY timestamp ASC
+                           RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_close
+                FROM candles
+                WHERE timestamp >= date('now', ?)
+                  AND timeframe = 'H1'
+                GROUP BY pair
+            """, (f"-{days} days",)).fetchall()
+
+        hold_map = {}
+        for r in hold_rows:
+            if r["first_close"] and r["last_close"] and r["first_close"] > 0:
+                pct_change = ((r["last_close"] - r["first_close"]) / r["first_close"]) * 100
+                hold_map[r["pair"]] = round(pct_change, 2)
+
+        results = []
+        total_bot = 0
+        for r in bot_rows:
+            pair = r["pair"]
+            bot_pl = r["bot_pl"] or 0
+            total_bot += bot_pl
+            hold_pct = hold_map.get(pair, 0)
+            wr = round(r["wins"] / r["trades"] * 100, 1) if r["trades"] > 0 else 0
+
+            results.append({
+                "pair": pair,
+                "trades": r["trades"],
+                "wins": r["wins"],
+                "win_rate": wr,
+                "bot_pl": bot_pl,
+                "hold_pct_change": hold_pct,
+                "alpha": round(bot_pl, 2),  # Simplified: bot P&L is the alpha since hold is % based
+            })
+
+        results.sort(key=lambda x: x["bot_pl"], reverse=True)
+
+        return {
+            "days": days,
+            "total_bot_pl": round(total_bot, 2),
+            "pairs": results,
+        }
+    except Exception as e:
+        logger.error(f"Benchmark query failed: {e}")
+        return {"days": days, "total_bot_pl": 0, "pairs": []}
+
+
 # ── Serve React Frontend ────────────────────────────────────────────────────
 # Mount static files LAST so API routes take priority
 

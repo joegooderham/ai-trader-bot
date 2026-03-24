@@ -1583,6 +1583,42 @@ async def scan_log(pair: str = None, limit: int = 50, traded_only: bool = False)
         return {"scans": [], "total": 0}
 
 
+# ── API Routes: P&L Calendar ────────────────────────────────────────────────
+
+@app.get("/api/calendar")
+async def pl_calendar(months: int = 3):
+    """Daily P&L calendar data — trades, wins, losses, net P&L per day."""
+    try:
+        with get_db() as db:
+            rows = db.execute("""
+                SELECT DATE(opened_at) as trade_date,
+                       COUNT(*) as trades,
+                       SUM(CASE WHEN pl > 0.01 THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN pl < -0.01 THEN 1 ELSE 0 END) as losses,
+                       SUM(CASE WHEN abs(pl) <= 0.01 THEN 1 ELSE 0 END) as breakeven,
+                       ROUND(SUM(pl), 2) as net_pl
+                FROM trades
+                WHERE closed_at IS NOT NULL
+                  AND opened_at >= date('now', ?)
+                GROUP BY trade_date
+                ORDER BY trade_date
+            """, (f"-{months * 30} days",)).fetchall()
+
+        days = {}
+        for r in rows:
+            days[r["trade_date"]] = {
+                "trades": r["trades"],
+                "wins": r["wins"],
+                "losses": r["losses"],
+                "breakeven": r["breakeven"],
+                "net_pl": r["net_pl"] or 0,
+            }
+        return days
+    except Exception as e:
+        logger.error(f"Calendar query failed: {e}")
+        return {}
+
+
 # ── Serve React Frontend ────────────────────────────────────────────────────
 # Mount static files LAST so API routes take priority
 

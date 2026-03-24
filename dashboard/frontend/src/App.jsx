@@ -19,6 +19,7 @@ import WhatIf from './pages/WhatIf'
 import Correlations from './pages/Correlations'
 import RiskExposure from './pages/RiskExposure'
 import ScanLog from './pages/ScanLog'
+import Calendar from './pages/Calendar'
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="/trades" element={<TradeHistory />} />
         <Route path="/journal" element={<TradeJournal />} />
         <Route path="/scan-log" element={<ScanLog />} />
+        <Route path="/calendar" element={<Calendar />} />
         <Route path="/summary" element={<Summary />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/heatmap" element={<Heatmap />} />

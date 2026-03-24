@@ -12,6 +12,7 @@ const navGroups = [
       { to: '/trades', label: 'Trades' },
       { to: '/journal', label: 'Journal' },
       { to: '/scan-log', label: 'Scan Log' },
+      { to: '/calendar', label: 'Calendar' },
     ],
   },
   {

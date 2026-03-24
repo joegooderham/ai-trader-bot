@@ -117,12 +117,15 @@ async def _fetch_community_outlook() -> dict:
     try:
         import httpx
 
-        # Myfxbook provides a public JSON endpoint for community outlook
+        # Myfxbook community outlook — use the API-style endpoint with a
+        # realistic browser User-Agent to avoid 403 blocks
         url = "https://www.myfxbook.com/community/outlook"
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "application/json, text/html",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Referer": "https://www.myfxbook.com/",
             })
 
             if resp.status_code != 200:

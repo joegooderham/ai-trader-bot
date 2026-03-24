@@ -87,7 +87,7 @@ async def get_volatility_details(pair: str) -> dict:
     """
     try:
         from broker.ig_client import IGClient
-        import pandas_ta as ta
+        import ta as ta_lib
 
         client = IGClient()
         df = client.get_candles(pair, count=50, granularity="H1")
@@ -95,7 +95,9 @@ async def get_volatility_details(pair: str) -> dict:
         if df is None or len(df) < 20:
             return {"regime": "normal", "error": "Insufficient data"}
 
-        atr_series = ta.atr(df["high"], df["low"], df["close"], length=14)
+        atr_series = ta_lib.volatility.AverageTrueRange(
+            df["high"], df["low"], df["close"], window=14
+        ).average_true_range()
         current_atr = float(atr_series.iloc[-1])
         average_atr = float(atr_series.tail(20).mean())
 
@@ -154,7 +156,7 @@ async def _calculate_regime(pair: str) -> str:
     """Calculate the volatility regime from live price data."""
     try:
         from broker.ig_client import IGClient
-        import pandas_ta as ta
+        import ta as ta_lib
 
         client = IGClient()
         df = client.get_candles(pair, count=50, granularity="H1")
@@ -163,8 +165,10 @@ async def _calculate_regime(pair: str) -> str:
             logger.warning(f"Insufficient data for volatility calc on {pair}")
             return "normal"
 
-        # Calculate 14-period ATR
-        atr_series = ta.atr(df["high"], df["low"], df["close"], length=14)
+        # Calculate 14-period ATR using the ta library (already in requirements)
+        atr_series = ta_lib.volatility.AverageTrueRange(
+            df["high"], df["low"], df["close"], window=14
+        ).average_true_range()
         current_atr = float(atr_series.iloc[-1])
 
         # Compare to 20-period average ATR

@@ -46,9 +46,9 @@ NEWS_FEEDS = [
         "currencies": ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF"],
     },
     {
-        "name": "Reuters Markets",
-        "url": "https://feeds.reuters.com/reuters/businessNews",
-        "currencies": ["USD", "EUR", "GBP"],
+        "name": "ForexLive",
+        "url": "https://www.forexlive.com/feed/news",
+        "currencies": ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"],
     },
     {
         "name": "Investing.com Forex",
@@ -286,16 +286,24 @@ async def _fetch_headlines() -> list:
 
 
 def _parse_feed_date(date_str: str) -> Optional[datetime]:
-    """Parse RSS date strings into UTC datetime."""
+    """Parse RSS date strings into UTC-aware datetime.
+    Always returns timezone-aware datetime to avoid comparison errors
+    with the UTC cutoff in _fetch_headlines."""
     if not date_str:
         return None
     try:
         import email.utils
         parsed = email.utils.parsedate_to_datetime(date_str)
+        # Ensure timezone-aware — some feeds return naive datetimes
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
     except Exception:
         try:
-            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except Exception:
             return None
 

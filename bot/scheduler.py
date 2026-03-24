@@ -1311,17 +1311,17 @@ def main():
     )
 
     # ── Profit Integrity Monitor (proactive anomaly detection) ────────────
-    # Hourly: checks for breakeven streaks, win rate collapse, P&L drift
+    # Integrity review: aligned with scan interval so it only reviews after new data
     scheduler.add_job(
         integrity_hourly_review,
-        "interval", minutes=60,
-        id="integrity_hourly", name="Integrity Hourly Review"
+        "interval", minutes=config.SCAN_INTERVAL_MINUTES,
+        id="integrity_hourly", name="Integrity Review"
     )
 
-    # Deep review every 4 hours: per-pair profitability, config effectiveness
+    # Deep review every 6 hours: per-pair profitability, config effectiveness
     scheduler.add_job(
         integrity_deep_review,
-        "interval", minutes=240,
+        "interval", minutes=360,
         id="integrity_deep", name="Integrity Deep Review"
     )
 

@@ -66,7 +66,7 @@ risk:
   take_profit_ratio: 2.0
   daily_loss_circuit_breaker_pct: 10.0
   trailing_stop_activation_atr: 2.0
-  trailing_stop_trail_atr: 1.5
+  trailing_stop_trail_atr: 2.0
   correlation_block_threshold: 0.75
   overnight_profit_protection_pct: 50.0
 schedule:
@@ -102,7 +102,7 @@ lstm:
   learning_rate: 0.001
   patience: 7
 remediation:
-  auto_approve: true
+  auto_approve: false
   review_delay_hours: 4
   autopause_weekly_loss_threshold: -50
   direction_winrate_alert_threshold: 30

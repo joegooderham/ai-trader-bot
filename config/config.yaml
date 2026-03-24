@@ -103,7 +103,7 @@ lstm:
   learning_rate: 0.001
   patience: 7
 remediation:
-  auto_approve: false
+  auto_approve: true
   review_delay_hours: 4
   autopause_weekly_loss_threshold: -50
   direction_winrate_alert_threshold: 30

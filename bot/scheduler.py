@@ -908,6 +908,8 @@ def force_close_all():
     """Runs at 23:59 UTC — closes every remaining open position."""
     global _day_start_balance, _day_start_date, _circuit_breaker_until
 
+    global _trading_paused
+
     logger.info("Running end-of-day force close")
     # Clear candle cache at day rollover so fresh data loads tomorrow
     broker.clear_candle_cache()
@@ -915,6 +917,12 @@ def force_close_all():
     _day_start_balance = None
     _day_start_date = None
     _circuit_breaker_until = None
+
+    # Reset daily profit target pause — new trading day starts clean
+    if _trading_paused and getattr(scan_markets, '_profit_target_date', None):
+        _trading_paused = False
+        scan_markets._profit_target_date = None
+        logger.info("Daily profit target pause reset — new trading day")
     close_results = eod_manager.force_close_non_held_positions()
 
     if close_results:

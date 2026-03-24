@@ -36,6 +36,24 @@ app = FastAPI(title="AI Trader MCP Server", version="1.0.0")
 _cache = {}
 CACHE_DURATION_SECONDS = config.MCP_CONFIG.get("cache_duration_minutes", 30) * 60
 
+# Shared IG client — reused across all MCP modules to avoid creating a new
+# authenticated session on every request. Previously each module created its
+# own IGClient(), burning through IG's auth rate limit (240 auth calls/hour
+# on 5-min scans with 10 pairs × 2 modules).
+_shared_ig_client = None
+
+def get_shared_ig_client():
+    """Get or create the shared IG client for the MCP server."""
+    global _shared_ig_client
+    if _shared_ig_client is None:
+        try:
+            from broker.ig_client import IGClient
+            _shared_ig_client = IGClient()
+            logger.info("MCP shared IG client initialised")
+        except Exception as e:
+            logger.warning(f"Failed to create shared IG client: {e}")
+    return _shared_ig_client
+
 
 @app.get("/health")
 async def health_check():
@@ -118,14 +136,18 @@ async def get_market_context(pair: str):
 
     logger.info(f"Fetching fresh market context for {pair}")
 
+    # Use the shared IG client for modules that need broker data —
+    # avoids creating a new authenticated session per module per pair
+    ig = get_shared_ig_client()
+
     # Run all analysis modules concurrently for speed
     results = await asyncio.gather(
         economic_calendar.get_upcoming_events(pair),
         sentiment.get_sentiment(pair),
         correlations.get_correlation_warning(pair),
-        volatility.get_volatility_regime(pair),
+        volatility.get_volatility_regime(pair, ig_client=ig),
         session_stats.get_session_performance(pair),
-        client_sentiment.get_client_sentiment(pair),
+        client_sentiment.get_client_sentiment(pair, ig_client=ig),
         fred_macro.get_macro_bias(pair),
         myfxbook_sentiment.get_community_sentiment(pair),
         cot_positioning.get_cot_positioning(pair),

@@ -56,7 +56,7 @@ REGIME_THRESHOLDS = {
 }
 
 
-async def get_volatility_regime(pair: str) -> str:
+async def get_volatility_regime(pair: str, ig_client=None) -> str:
     """
     Get the current volatility regime for a currency pair.
 
@@ -66,7 +66,7 @@ async def get_volatility_regime(pair: str) -> str:
     if cached is not None:
         return cached
 
-    regime = await _calculate_regime(pair)
+    regime = await _calculate_regime(pair, ig_client=ig_client)
     _save_cache(pair, regime)
     return regime
 
@@ -152,13 +152,16 @@ async def get_volatility_details(pair: str) -> dict:
         return {"regime": "normal", "error": str(e)}
 
 
-async def _calculate_regime(pair: str) -> str:
+async def _calculate_regime(pair: str, ig_client=None) -> str:
     """Calculate the volatility regime from live price data."""
     try:
-        from broker.ig_client import IGClient
         import ta as ta_lib
 
-        client = IGClient()
+        # Use shared client if provided, otherwise create one (fallback)
+        if ig_client is None:
+            from broker.ig_client import IGClient
+            ig_client = IGClient()
+        client = ig_client
         df = client.get_candles(pair, count=50, granularity="H1")
 
         if df is None or len(df) < 20:

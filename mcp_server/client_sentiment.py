@@ -20,7 +20,7 @@ from loguru import logger
 from bot import config
 
 
-async def get_client_sentiment(pair: str) -> dict:
+async def get_client_sentiment(pair: str, ig_client=None) -> dict:
     """
     Fetch IG client sentiment for a currency pair.
 
@@ -40,12 +40,11 @@ async def get_client_sentiment(pair: str) -> dict:
         return _neutral_result(pair)
 
     try:
-        # Import here to avoid circular imports — IGClient is created by scheduler,
-        # and this module is loaded by the MCP server which starts independently.
-        # We create a lightweight client instance just for sentiment lookups.
-        from broker.ig_client import IGClient
-        client = IGClient()
-        sentiment = client.get_client_sentiment(pair)
+        # Use shared IG client if provided, otherwise create one (fallback)
+        if ig_client is None:
+            from broker.ig_client import IGClient
+            ig_client = IGClient()
+        sentiment = ig_client.get_client_sentiment(pair)
 
         if not sentiment:
             return _neutral_result(pair)

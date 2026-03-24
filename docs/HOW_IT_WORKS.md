@@ -5,14 +5,26 @@
 
 ## The Big Picture
 
-Every 15 minutes, the bot wakes up and asks the same question for each currency pair:
+Every 3 hours, the bot wakes up and asks the same question for each currency pair:
 
 > *"Is there a good trading opportunity right now, and how confident am I?"*
 
-If the answer is confident enough (60% or above), it places a trade.
+If the answer is confident enough (85% or above), it places a trade.
 If not, it does nothing and waits for the next scan.
 
 Simple as that.
+
+```mermaid
+flowchart LR
+    A["⏰ Wake up<br/>every 3 hours"] --> B["📊 Check 10<br/>currency pairs"]
+    B --> C{"Confidence<br/>≥ 85%?"}
+    C -->|Yes| D["💰 Place trade"]
+    C -->|No| E["⏭️ Skip it"]
+    D --> F["📱 Alert on Telegram"]
+
+    style D fill:#059669,stroke:#10b981,color:#fff
+    style E fill:#6b7280,stroke:#9ca3af,color:#fff
+```
 
 ---
 
@@ -24,218 +36,173 @@ The bot asks IG Group: *"Give me the last 60 price bars for EUR/USD."*
 A "price bar" contains the open, high, low, and close price for a 1-hour period.
 60 bars = about 2.5 days of recent price history.
 
-If IG is unavailable (rate limits, downtime), the bot automatically falls back to Yahoo Finance (yfinance) as a free backup data source. You'll get a Telegram alert when this happens.
-
-Candle data is also stored in a local SQLite database, so the bot checks its cache before making API calls — this keeps IG data usage well within the demo account's 10k points/week limit.
+If IG is unavailable, the bot automatically falls back to Yahoo Finance as a free backup. You'll get a Telegram alert when this happens.
 
 ### 2. Calculate Technical Indicators
 The bot runs the price data through several standard trading tools:
 
-**RSI (Relative Strength Index)**
-Imagine a rubber band. The more stretched it gets, the more likely it snaps back.
-RSI measures how "stretched" the price is.
-- Below 30 = stretched downward (potential buy)
-- Above 70 = stretched upward (potential sell)
+```mermaid
+graph LR
+    PRICE["60 Price Bars"] --> RSI["RSI<br/>Overbought/<br/>Oversold"]
+    PRICE --> MACD["MACD<br/>Momentum<br/>Direction"]
+    PRICE --> BB["Bollinger<br/>Bands<br/>Price Range"]
+    PRICE --> EMA["EMA Cross<br/>Trend<br/>Direction"]
+    PRICE --> ATR["ATR<br/>Volatility<br/>Level"]
+    PRICE --> VOL["Volume<br/>Signal<br/>Strength"]
 
-**MACD**
-Compares a fast-moving average to a slow-moving average of price.
-When the fast one crosses the slow one, momentum is shifting.
-Think of it like a car — MACD tells you whether the engine is accelerating or braking.
-
-**Bollinger Bands**
-Three lines around the price — a middle average and two outer bands.
-When price touches the outer bands, it often bounces back to the middle.
-Like a ball bouncing off walls.
-
-**EMA Crossover**
-Two moving averages — one reacts quickly to price (20-period), one slowly (50-period).
-When the fast one is above the slow one, the trend is up.
-When it's below, the trend is down.
-
-**ATR (Average True Range)**
-Measures how much a price typically moves in one period.
-Used to set stop-losses at a sensible distance — not too tight, not too loose.
-
-### 3. Ask the MCP Server for Context
-Before deciding, the bot consults its "research desk" — the MCP server.
-
-The MCP server answers questions like:
-- *"Is there a major economic announcement in the next 2 hours?"* (If yes, confidence drops — news events cause unpredictable moves)
-- *"What's the overall news sentiment for EUR/USD today?"* (Bullish news supports a BUY signal)
-- *"Are we already holding GBP/USD? Because EUR/USD moves similarly — we'd be doubling our risk."*
-- *"Is the market in a high-volatility regime right now?"* (High volatility = more caution)
-- *"Has EUR/USD historically made money during this session?"*
-
-The MCP server then calls Claude AI to pull all this together into an intelligent context summary.
-
-### 4. Calculate the Confidence Score
-All the indicator signals and MCP context are combined into a single score: **0 to 100%**.
-
-Here's how the score is built:
-
-```
-LSTM Neural Network        →  up to 50 points
-MACD + RSI consensus       →  up to 20 points
-EMA trend alignment        →  up to 15 points
-Bollinger Band position    →  up to 10 points
-Volume confirmation        →  up to  5 points
-─────────────────────────────────────────────
-Total before MCP           →  up to 100 points
-
-MCP Context modifier       →  ±0 to ±15 points
-(economic events, sentiment, correlations, volatility)
-─────────────────────────────────────────────
-FINAL SCORE                →  0 to 100%
+    style RSI fill:#1e40af,stroke:#3b82f6,color:#fff
+    style MACD fill:#1e40af,stroke:#3b82f6,color:#fff
+    style BB fill:#1e40af,stroke:#3b82f6,color:#fff
+    style EMA fill:#1e40af,stroke:#3b82f6,color:#fff
+    style ATR fill:#1e40af,stroke:#3b82f6,color:#fff
+    style VOL fill:#1e40af,stroke:#3b82f6,color:#fff
 ```
 
-The bot **only trades if the final score is 60% or above**.
+**RSI** — Like a rubber band. The more stretched the price gets, the more likely it snaps back.
+**MACD** — Like a car's engine. Tells you whether momentum is accelerating or braking.
+**Bollinger Bands** — Price bounces between walls. Touching the outer wall often means a reversal.
+**EMA Crossover** — When the fast average crosses the slow one, the trend is shifting.
+**ATR** — How much the price typically moves. Used to set stop-losses at a sensible distance.
 
-### 5. Size the Trade Safely
-If the score qualifies, the bot calculates how many IG mini CFD contracts to trade.
+### 3. Ask the AI Brain (LSTM Neural Network)
+The bot has a real neural network that looks at the last 30 hours of data (25 features per hour) and predicts: **will the price go up, down, or sideways?**
 
-The rule: **risk only 2% of your total capital on any single trade**.
+This contributes **50% of the confidence score** — it's the single biggest input.
 
-Example with £500 capital:
-- Maximum loss per trade: £10 (2% of £500)
-- Stop-loss is set 1.5 ATR away from entry
-- Contract size is calculated so that if the stop-loss is hit, you lose exactly £10
-- Minimum is always 1 contract (10,000 currency units)
+The LSTM retrains every 4 hours on fresh data, and it learns from the bot's actual trade results: winning patterns get reinforced, losing patterns get corrected.
 
-This is called "position sizing" — it's what prevents any single bad trade from doing real damage.
+### 4. Check the Market Context (9 Data Sources)
+Before deciding, the bot consults its "research desk" — the MCP server:
 
-### 6. Place the Trade
-The bot tells IG Group to buy or sell a specific number of contracts, with:
-- **Stop-Loss**: The price at which IG will automatically cut the loss
-- **Take-Profit**: The price at which IG will automatically bank the profit
+```mermaid
+graph TD
+    MCP["🔬 MCP Server"] --> EC["📅 Economic Calendar<br/>Major news events?"]
+    MCP --> NS["📰 News Sentiment<br/>Bullish or bearish?"]
+    MCP --> IG["👥 IG Client Sentiment<br/>What are retail traders doing?"]
+    MCP --> MFX["👥 Myfxbook Sentiment<br/>100k traders' positions"]
+    MCP --> COT["🏦 CFTC COT Data<br/>What are hedge funds doing?"]
+    MCP --> FRED["💵 FRED Macro<br/>Interest rate differentials"]
+    MCP --> VOL["📊 Volatility Regime<br/>Calm or stormy?"]
+    MCP --> SESS["🕐 Session Stats<br/>Good time for this pair?"]
+    MCP --> CORR["🔗 Correlation Risk<br/>Already holding similar?"]
 
-Both orders are set on IG's servers. Even if the bot crashes, your position is protected.
+    style MCP fill:#7c3aed,stroke:#8b5cf6,color:#fff
+```
 
-### 7. Send You a Telegram Message
-Immediately after placing the trade, you get a message on Telegram:
-- What pair was traded
-- Buy or sell
-- Entry price
-- Stop-loss and take-profit levels
-- The confidence score
-- A plain-English explanation of why
+### 5. Calculate the Confidence Score
+
+All signals are combined into a single score: **0 to 100%**.
+
+```mermaid
+pie title Confidence Score Components
+    "LSTM Neural Network" : 50
+    "MACD + RSI" : 20
+    "EMA Trend" : 15
+    "Bollinger Bands" : 10
+    "Volume" : 5
+```
+
+Then the 9 MCP context signals adjust it — boosting aligned signals, penalising conflicting ones. The bot **only trades if the final score is 85% or above**.
+
+### 6. Size the Trade Safely
+The rule: **risk only 2% of capital on any single trade** (£10 on £500).
+
+- Stop-loss set at 2.0× ATR from entry (adapts to volatility)
+- Take-profit set at 2:1 reward-to-risk ratio
+- Position size calculated so hitting the stop-loss loses exactly 2%
+
+### 7. Place the Trade & Notify
+The bot places the trade on IG with a stop-loss and take-profit, then sends you a Telegram message with the full details and reasoning.
 
 ---
 
-## End of Day (23:59 UTC Every Night)
+## End of Day (23:59 UTC)
 
-The bot closes every open position at 23:59 UTC.
+```mermaid
+flowchart TD
+    A["23:45 UTC<br/>Re-evaluate all positions"] --> B{"Confidence ≥ 65%<br/>AND profitable?"}
+    B -->|Yes| C["🌙 Hold overnight<br/>Tighten stop to protect 50% profit"]
+    B -->|No| D["Close position"]
+    D --> E["23:59 UTC<br/>Force close everything remaining"]
+    C --> F["📱 Telegram: Overnight hold alert"]
+    E --> G["00:05 UTC<br/>Send daily report"]
 
-**Why?**
-Holding trades overnight introduces "gap risk" — prices can jump sharply when major news breaks outside trading hours. Day traders close everything daily to avoid waking up to unexpected losses.
-
-**The one exception — the 98% Rule:**
-At 23:45, the bot re-evaluates every open position one last time.
-If a position scores 98% or higher AND is currently profitable, it's held overnight.
-The stop-loss is tightened to protect 75% of the current profit.
-You get a Telegram message telling you which position was held and why.
-
-This exception is rare. The 98% bar is intentionally very high.
-
----
-
-## Your Daily Report (00:05 UTC)
-
-Every night after the close, you get a summary:
-
-- How many trades were placed
-- How many won vs. lost
-- Total profit or loss for the day
-- Best and worst performing pair
-- Your current account balance
-- Any positions held overnight
-
----
-
-## Your Weekly Report (Sunday 20:00 UTC)
-
-Every Sunday evening, you get a bigger picture:
-
-- Weekly P&L summary
-- Win rate over the week
-- Which pairs performed best
-- **Claude AI's outlook for the coming week** — based on upcoming economic events and current sentiment
-
----
-
-## How the AI Learns — LSTM Neural Network
-
-The bot has a real neural network (LSTM — Long Short-Term Memory) that learns from market data and contributes 50% of the confidence score.
-
-### What It Learns From
-
-Every 15 minutes when the bot scans the market, it saves the candle data (open, high, low, close, volume) to a local SQLite database. This means the LSTM's training data grows continuously throughout the day with real market data from IG.
-
-On top of that, each training cycle tops up any gaps from Yahoo Finance (yfinance), so the database always has complete, up-to-date coverage.
-
-### How It Trains
-
-The LSTM retrains automatically on a rolling interval (default: every 4 hours, tuneable in `config.yaml`). Each cycle:
-
-1. Downloads any new candles since the last training run
-2. Transforms raw price data into 12 normalised features (indicators like RSI, MACD, Bollinger Bands, plus time-of-day encoding)
-3. Labels each candle: "did the price go up, down, or sideways in the next 3 hours?"
-4. Feeds 30-candle sequences into the neural network
-5. Trains until validation loss stops improving (early stopping)
-6. Hot-swaps the live model — no restart needed
-
-### Adaptive Data Window
-
-Training starts with 3 months of history. If the model's accuracy drops below 50%, it automatically extends the window by 2 weeks for every 10% below threshold, up to a maximum of 6 months. Beyond 6 months, older data tends to hurt more than help because market conditions change.
-
-### Shadow Mode
-
-When first deployed, the LSTM runs in "shadow mode" — it generates predictions and logs them alongside the indicator-only scores, but doesn't affect actual trades. This lets you compare:
-
-```
-EUR_USD SHADOW | LSTM: 72.3% BUY | Indicators: 58.1% BUY | Delta: +14.2pp
+    style C fill:#7c3aed,stroke:#8b5cf6,color:#fff
+    style E fill:#dc2626,stroke:#ef4444,color:#fff
 ```
 
-Once you're satisfied the LSTM is adding value, flip `shadow_mode: false` in `config.yaml` and it will drive real trade decisions.
+---
 
-### Training Duration
+## Self-Healing: Automated Remediation
 
-Each training cycle reports its exact duration in Telegram, so you can track whether training takes 90 seconds or 10 minutes on your hardware. The goal is to tighten the retrain interval towards real-time as you learn how fast it runs.
+The bot monitors its own performance and fixes problems without you needing to intervene:
 
-**Weekly Claude Analysis**
-Every Sunday, Claude AI also reviews the week's trading results alongside market context. It identifies patterns — "EUR/USD trades have been more profitable during London session" or "high-volatility periods have led to losses" — and these are shared in the weekly Telegram report.
+```mermaid
+flowchart TD
+    A["🔍 Integrity Review<br/>Every 3 hours"] --> B{"Problems<br/>detected?"}
+    B -->|No| C["✅ All clear"]
+    B -->|Yes| D["🔬 Diagnose root cause"]
+    D --> E["📱 Send recommendation<br/>via Telegram buttons"]
+    E --> F{"Your choice"}
+    F -->|"✅ Approve"| G["Apply fix instantly<br/>No restart needed"]
+    F -->|"❌ Reject"| H["Dismiss"]
+
+    D --> I{"Weekly P&L < -£50?"}
+    I -->|Yes| J["🚨 Auto-pause trading<br/>No approval needed"]
+
+    style J fill:#dc2626,stroke:#ef4444,color:#fff
+    style G fill:#059669,stroke:#10b981,color:#fff
+```
+
+---
+
+## The Dashboard
+
+A full web dashboard at **aitradefintech.com**, protected by Google login:
+
+| Section | What you see |
+|---------|-------------|
+| **Overview** | Today's P&L, intraday chart, open positions |
+| **Positions** | Live positions with close buttons |
+| **Calendar** | Monthly grid — P&L per day at a glance |
+| **Trade Journal** | Every trade with full reasoning and breakdown |
+| **AI Chat** | Ask Claude anything about your trading |
+| **Heatmap** | Which pairs work at which times |
+| **Config** | Change settings with sliders — takes effect immediately |
+| **Mystic Wolf** | "What if I had used different settings last week?" simulator |
+
+---
+
+## Infrastructure
+
+```mermaid
+graph LR
+    GH["🐙 GitHub<br/>Push code"] -->|"Auto-deploy"| RUNNER["🖥️ Self-hosted<br/>Windows PC"]
+    RUNNER --> DOCKER["🐳 Docker<br/>5 containers"]
+    DOCKER --> CF["🔒 Cloudflare<br/>HTTPS + Auth"]
+    CF --> WEB["🌐 aitradefintech.com"]
+
+    style GH fill:#1e40af,stroke:#3b82f6,color:#fff
+    style DOCKER fill:#7c3aed,stroke:#8b5cf6,color:#fff
+    style CF fill:#059669,stroke:#10b981,color:#fff
+```
+
+Push code to GitHub → containers rebuild automatically → dashboard updates within 60 seconds. Zero manual deployment.
 
 ---
 
 ## Why This Isn't Just Pattern Matching
 
-Traditional trading bots spot patterns and act on them blindly.
-For example: "RSI below 30 = always buy." That's pattern matching. It works sometimes, fails catastrophically in others.
+Traditional trading bots: "RSI below 30 = always buy." That's pattern matching. Works sometimes, fails catastrophically in others.
 
-This bot is different because:
+This bot is different:
 
-1. **It understands context** — a buy signal during a major news event is completely different from the same signal on a quiet day. The MCP server knows the difference.
-
-2. **Claude AI reasons** — when generating the weekly outlook and analysing trade contexts, Claude doesn't just calculate. It reasons. It considers multiple factors simultaneously and explains its thinking.
-
-3. **Confidence scoring is multi-layered** — no single indicator can trigger a trade. Multiple signals must agree, and external context must support the decision.
-
-4. **It knows what it doesn't know** — when confidence is below 60%, the bot does nothing. Sitting on your hands when the signal is unclear is one of the hardest things in trading. This bot does it consistently.
+1. **It understands context** — a buy signal during a major news event is completely different from the same signal on a quiet day
+2. **9 independent data sources must agree** — no single indicator can trigger a trade
+3. **The AI learns from its mistakes** — losing trades get fed back into the LSTM so it learns to avoid those setups
+4. **It self-heals** — detects when a strategy stops working and recommends fixes
+5. **It knows when to sit out** — at 85% confidence threshold, most scans result in doing nothing. Sitting on your hands when uncertain is one of the hardest things in trading.
 
 ---
 
-## The Infrastructure — Why Docker?
-
-Docker packages the entire application — code, libraries, configuration — into a container that runs identically everywhere.
-
-Today: your Windows laptop in a shed.
-Tomorrow: a £4/month Linux server in a datacentre.
-Same command. Same behaviour. Zero reconfiguration.
-
-It also means:
-- The bot restarts automatically if it crashes
-- Updates are as simple as `git pull && docker-compose up -d --build`
-- You always know exactly what version is running
-
----
-
-*This document is kept updated alongside the codebase.*
+*For the full technical architecture with detailed Mermaid diagrams, see [ARCHITECTURE.md](ARCHITECTURE.md).*

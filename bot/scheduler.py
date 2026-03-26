@@ -1793,8 +1793,13 @@ def main():
     # a ready-to-paste Claude Code prompt if changes are needed
     scheduler.add_job(
         daily_strategy_review,
+        CronTrigger(hour=13, minute=0),
+        id="strategy_review_1pm", name="Strategy Review (1pm)"
+    )
+    scheduler.add_job(
+        daily_strategy_review,
         CronTrigger(hour=17, minute=0),
-        id="daily_strategy_review", name="Daily Strategy Review (5pm)"
+        id="strategy_review_5pm", name="Strategy Review (5pm)"
     )
 
     logger.info("📅 Scheduler started with the following jobs:")

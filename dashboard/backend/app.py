@@ -1580,6 +1580,73 @@ async def pl_calendar(months: int = 3):
         return {}
 
 
+@app.get("/api/calendar/{date}")
+async def calendar_day_detail(date: str):
+    """Get all trades for a specific date with full detail."""
+    try:
+        with get_db() as db:
+            rows = db.execute("""
+                SELECT id, pair, direction, pl, confidence_score, close_reason,
+                       fill_price, close_price, stop_loss, take_profit,
+                       opened_at, closed_at, reasoning, breakdown
+                FROM trades
+                WHERE opened_at LIKE ?
+                ORDER BY opened_at
+            """, (f"{date}%",)).fetchall()
+
+        trades = []
+        for r in rows:
+            t = dict(r)
+            # Parse breakdown JSON
+            if t.get("breakdown"):
+                try:
+                    import json as _json
+                    t["breakdown"] = _json.loads(t["breakdown"])
+                except Exception:
+                    pass
+            # Calculate duration
+            if t.get("opened_at") and t.get("closed_at"):
+                try:
+                    from datetime import datetime as dt
+                    o = dt.fromisoformat(t["opened_at"].replace("Z", "+00:00"))
+                    c = dt.fromisoformat(t["closed_at"].replace("Z", "+00:00"))
+                    t["duration_min"] = round((c - o).total_seconds() / 60)
+                except Exception:
+                    pass
+            # R:R achieved
+            if t.get("fill_price") and t.get("stop_loss") and t.get("close_price"):
+                risk = abs(t["fill_price"] - t["stop_loss"])
+                reward = abs(t["close_price"] - t["fill_price"])
+                t["rr_achieved"] = round(reward / risk, 1) if risk > 0 else 0
+            trades.append(t)
+
+        # Summary stats
+        closed = [t for t in trades if t.get("closed_at")]
+        total_pl = sum(t.get("pl", 0) for t in closed)
+        wins = [t for t in closed if (t.get("pl") or 0) > 0.01]
+        losses = [t for t in closed if (t.get("pl") or 0) < -0.01]
+        best = max(closed, key=lambda t: t.get("pl", 0)) if closed else None
+        worst = min(closed, key=lambda t: t.get("pl", 0)) if closed else None
+
+        return {
+            "date": date,
+            "trades": trades,
+            "summary": {
+                "total": len(closed),
+                "wins": len(wins),
+                "losses": len(losses),
+                "breakeven": len(closed) - len(wins) - len(losses),
+                "net_pl": round(total_pl, 2),
+                "win_rate": round(len(wins) / len(closed) * 100, 1) if closed else 0,
+                "best_trade": f"{best['pair']} +£{best['pl']:.2f}" if best and best.get('pl', 0) > 0 else None,
+                "worst_trade": f"{worst['pair']} £{worst['pl']:.2f}" if worst and worst.get('pl', 0) < 0 else None,
+            },
+        }
+    except Exception as e:
+        logger.error(f"Calendar day detail failed: {e}")
+        return {"date": date, "trades": [], "summary": {}}
+
+
 # ── API Routes: Performance Benchmark ────────────────────────────────────────
 
 @app.get("/api/analytics/benchmark")

@@ -13,7 +13,7 @@ trading:
   enable_streaming: true
   streaming_pl_alert_threshold: 5.0
   scan_interval_minutes: 180
-  max_open_positions: 3
+  max_open_positions: 5
   per_trade_risk_pct: 2.0
   max_per_trade_spend: 10.0
   timeframe: H1

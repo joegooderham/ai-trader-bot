@@ -64,7 +64,7 @@ risk:
   partial_close_pct: 50
   stop_loss_atr_multiplier: 2.0
   take_profit_ratio: 2.0
-  daily_profit_target: 30
+  daily_profit_target: 20
   daily_loss_circuit_breaker_pct: 10.0
   trailing_stop_activation_atr: 2.0
   trailing_stop_trail_atr: 2.0

@@ -17,6 +17,7 @@ yfinance>=1.2.0                # Free historical Forex data from Yahoo Finance
 torch>=2.2.0                   # LSTM model for trade direction prediction
 scikit-learn==1.3.2            # ML utilities (scaling, metrics)
 joblib==1.3.2                  # Model saving/loading
+transformers>=4.36.0           # FinBERT financial sentiment NLP (free, open source)
 
 # Scheduling
 APScheduler==3.10.4            # Task scheduling (run bot every 15 min, etc.)

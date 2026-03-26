@@ -449,4 +449,61 @@ def _apply_mcp_context(
                 f"— trading against institutional positioning"
             )
 
+    # ── Market Regime — VIX, DXY, Yield Spread (Free Signals) ────────────
+    # These macro indicators provide regime awareness:
+    #   VIX high/extreme → penalty (volatile conditions)
+    #   DXY trend aligns with trade → boost
+    #   Inverted yield curve → penalty (recession risk)
+    #   Fear & Greed extreme → penalty (contrarian)
+    regime = mcp_context.get("market_regime", {})
+
+    # VIX regime — already handled by volatility module but VIX is more specific
+    vix_regime = regime.get("vix_regime", "normal")
+    if vix_regime == "extreme":
+        modifier -= 10
+        reasoning_parts.append(
+            f"⚠️ VIX extreme ({regime.get('vix', '?')}) — high fear, risky conditions"
+        )
+    elif vix_regime == "high":
+        modifier -= 5
+        reasoning_parts.append(
+            f"VIX elevated ({regime.get('vix', '?')}) — cautious conditions"
+        )
+
+    # DXY Dollar Index — directional bias for USD pairs
+    dxy_bias = regime.get("dxy_bias", "NEUTRAL")
+    if dxy_bias != "NEUTRAL":
+        if dxy_bias == direction:
+            modifier += 5
+            reasoning_parts.append(
+                f"DXY {regime.get('dxy_trend', '?')} — supports {direction}"
+            )
+        else:
+            modifier -= 5
+            reasoning_parts.append(
+                f"DXY {regime.get('dxy_trend', '?')} — opposes {direction}"
+            )
+
+    # Treasury yield spread — recession indicator
+    yield_signal = regime.get("yield_signal", "normal")
+    if yield_signal == "inverted":
+        modifier -= 8
+        reasoning_parts.append(
+            f"⚠️ Yield curve inverted ({regime.get('yield_spread', '?')}) — recession risk, "
+            f"favour safe havens (JPY, CHF)"
+        )
+
+    # Fear & Greed extremes — contrarian
+    fear_greed = regime.get("fear_greed", 50)
+    if fear_greed < 20:
+        modifier -= 3
+        reasoning_parts.append(
+            f"Extreme fear ({fear_greed}/100) — market may be oversold but volatile"
+        )
+    elif fear_greed > 80:
+        modifier -= 3
+        reasoning_parts.append(
+            f"Extreme greed ({fear_greed}/100) — market may be overbought"
+        )
+
     return modifier

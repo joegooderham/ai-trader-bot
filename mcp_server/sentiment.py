@@ -151,18 +151,27 @@ def _score_by_currency(headlines: list) -> dict:
             if any(p in text for p in patterns):
                 currency_data[currency]["articles"] += 1
 
-                # Count bullish and bearish keywords
-                bullish_hits = sum(1 for kw in BULLISH_KEYWORDS if kw in text)
-                bearish_hits = sum(1 for kw in BEARISH_KEYWORDS if kw in text)
+                # Use FinBERT NLP if available, fall back to keyword matching
+                title = headline.get("title", "")
+                finbert_score = _score_with_finbert(title)
 
-                if bullish_hits > bearish_hits:
-                    currency_data[currency]["bullish"] += 1
-                    if len(currency_data[currency]["samples"]) < 3:
-                        currency_data[currency]["samples"].append(headline.get("title", ""))
-                elif bearish_hits > bullish_hits:
-                    currency_data[currency]["bearish"] += 1
-                    if len(currency_data[currency]["samples"]) < 3:
-                        currency_data[currency]["samples"].append(headline.get("title", ""))
+                if finbert_score is not None:
+                    # FinBERT returns -1.0 to +1.0
+                    if finbert_score > 0.15:
+                        currency_data[currency]["bullish"] += 1
+                    elif finbert_score < -0.15:
+                        currency_data[currency]["bearish"] += 1
+                else:
+                    # Fallback: keyword matching
+                    bullish_hits = sum(1 for kw in BULLISH_KEYWORDS if kw in text)
+                    bearish_hits = sum(1 for kw in BEARISH_KEYWORDS if kw in text)
+                    if bullish_hits > bearish_hits:
+                        currency_data[currency]["bullish"] += 1
+                    elif bearish_hits > bullish_hits:
+                        currency_data[currency]["bearish"] += 1
+
+                if len(currency_data[currency]["samples"]) < 3:
+                    currency_data[currency]["samples"].append(title)
 
     # Convert to scores
     scores = {}
@@ -283,6 +292,19 @@ async def _fetch_headlines() -> list:
 
     logger.info(f"Sentiment analysis: {len(all_headlines)} total headlines collected")
     return all_headlines
+
+
+def _score_with_finbert(headline: str) -> Optional[float]:
+    """Score a headline using FinBERT if available. Returns None if not loaded."""
+    try:
+        from mcp_server.finbert_sentiment import score_headline, is_available
+        if is_available():
+            return score_headline(headline)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    return None
 
 
 def _parse_feed_date(date_str: str) -> Optional[datetime]:

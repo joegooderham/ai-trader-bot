@@ -13,7 +13,7 @@ trading:
   enable_streaming: true
   streaming_pl_alert_threshold: 5.0
   scan_interval_minutes: 180
-  max_open_positions: 0
+  max_open_positions: 3
   per_trade_risk_pct: 2.0
   max_per_trade_spend: 10.0
   timeframe: H1
@@ -65,6 +65,11 @@ risk:
   stop_loss_atr_multiplier: 2.0
   take_profit_ratio: 2.0
   daily_profit_target: 20
+  sleep_protection:
+    enabled: true
+    start_hour: 23    # UTC — start banking profits at 11pm
+    end_hour: 8       # UTC — stop at 8:30am (use 8, checked with 30 min buffer)
+    profit_threshold: 10  # Bank any position that hits £10 profit during sleep hours
   daily_loss_circuit_breaker_pct: 10.0
   trailing_stop_activation_atr: 2.0
   trailing_stop_trail_atr: 2.0

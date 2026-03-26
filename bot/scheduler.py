@@ -700,6 +700,63 @@ def monitor_positions():
         except Exception as e:
             logger.error(f"Daily profit target check failed: {e}")
 
+    # ── Sleep-Time Profit Protection ─────────────────────────────────────────
+    # During sleep hours (23:00-08:30 UTC), close any position that hits the
+    # profit threshold. Keeps trading open — only banks individual winners.
+    sleep_cfg = config._cfg.get("risk", {}).get("sleep_protection", {})
+    if sleep_cfg.get("enabled") and open_trades:
+        hour = datetime.now(timezone.utc).hour
+        start_h = sleep_cfg.get("start_hour", 23)
+        end_h = sleep_cfg.get("end_hour", 8)
+        threshold = sleep_cfg.get("profit_threshold", 10)
+
+        # Check if we're in sleep hours (wraps midnight)
+        in_sleep = hour >= start_h or hour < end_h
+
+        if in_sleep:
+            for trade in open_trades:
+                upl = float(trade.get("unrealizedPL", 0))
+                if upl >= threshold:
+                    deal_id = trade.get("dealId")
+                    pair = trade.get("pair") or trade.get("instrument", "?")
+                    size = float(trade.get("dealSize", 1))
+                    direction = trade.get("direction", "BUY")
+
+                    logger.info(f"SLEEP PROTECTION: {pair} UPL £{upl:.2f} >= £{threshold} — banking profit")
+
+                    try:
+                        result = broker.close_trade(deal_id, size, direction)
+                        if result:
+                            pl = result.get("pl", upl)
+                            try:
+                                bal = broker.get_account_balance()
+                            except Exception:
+                                bal = 0
+
+                            storage.update_trade(deal_id, {
+                                "close_price": result.get("close_price"),
+                                "pl": pl,
+                                "closed_at": result.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                                "close_reason": f"Sleep protection (£{threshold} target)",
+                                "status": "CLOSED",
+                            })
+                            trade_num = storage.get_trade_number(deal_id)
+                            notifier.trade_closed(
+                                pair=pair, direction=direction,
+                                close_price=result.get("close_price", 0),
+                                pl=pl,
+                                reason=f"Sleep protection (£{threshold} target)",
+                                account_balance=bal, trade_number=trade_num,
+                            )
+                            notifier._send_system(
+                                f"*😴 SLEEP PROTECTION — PROFIT BANKED*\n"
+                                f"─────────────────────\n"
+                                f"{pair.replace('_', '/')} {direction} → +£{pl:.2f}\n"
+                                f"_Banked during sleep hours ({start_h}:00-{end_h}:30 UTC)_"
+                            )
+                    except Exception as e:
+                        logger.error(f"Sleep protection close failed for {pair}: {e}")
+
     # ── Position Reconciliation ─────────────────────────────────────────────
     # Every 5 minutes, check that DB and IG agree on what's open.
     # If IG closed a position (stop/TP hit) but the DB missed the update,

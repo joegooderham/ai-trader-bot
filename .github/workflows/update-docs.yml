@@ -4,11 +4,9 @@ name: Auto-Update Documentation
 # Uses Claude API to intelligently update only affected documentation
 
 on:
-  workflow_run:
-    workflows: ["AI Trader Bot"]  # Runs after the main CI workflow completes
-    types: [completed]
-    branches: [main]
-  workflow_dispatch:  # Manual trigger for testing
+  workflow_dispatch:  # Manual trigger only — disabled automatic runs
+  # Previously ran after every CI deploy but was failing consistently
+  # and docs are maintained manually now. Keep for occasional use.
 
 jobs:
   update-docs:

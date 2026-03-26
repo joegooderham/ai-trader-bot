@@ -92,6 +92,7 @@ services:
       - DASHBOARD_CMD_TOKEN=${DASHBOARD_CMD_TOKEN}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - DOCS_DIR=/app/docs
+      - DASHBOARD_OWNER_EMAIL=${DASHBOARD_OWNER_EMAIL}
     volumes:
       - ./data_store:/app/data_store:ro
       - ./docs:/app/docs:ro

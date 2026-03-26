@@ -29,5 +29,6 @@ jobs:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
           FRED_API_TOKEN: ${{ secrets.FRED_API_TOKEN }}
           DASHBOARD_CMD_TOKEN: ${{ secrets.DASHBOARD_CMD_TOKEN }}
+          DASHBOARD_OWNER_EMAIL: ${{ secrets.DASHBOARD_OWNER_EMAIL }}
         run: |
           docker-compose up -d --build

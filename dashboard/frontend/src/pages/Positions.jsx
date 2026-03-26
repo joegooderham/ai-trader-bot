@@ -1,5 +1,6 @@
 import { useApi } from '../hooks/useApi'
 import { useCommand } from '../hooks/useCommand'
+import { useRole } from '../hooks/useRole'
 import PLBadge from '../components/PLBadge'
 import TradeControls from '../components/TradeControls'
 import { useToast } from '../components/Toast'
@@ -59,6 +60,7 @@ export default function Positions() {
   const data = mergePositionData(igData, dbData)
   const { execute, loading: cmdLoading } = useCommand()
   const { showToast, ToastComponent } = useToast()
+  const { isOwner } = useRole()
 
   function handleControlAction(action, result, isError) {
     if (isError) {
@@ -104,7 +106,7 @@ export default function Positions() {
     <div>
       {ToastComponent}
 
-      <TradeControls onAction={handleControlAction} />
+      {isOwner && <TradeControls onAction={handleControlAction} />}
 
       <div className="flex items-center justify-between mb-4 md:mb-6">
         <div>

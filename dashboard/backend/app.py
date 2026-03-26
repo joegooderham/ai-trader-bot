@@ -25,7 +25,7 @@ from pathlib import Path
 import httpx
 import markdown
 import yfinance as yf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -52,6 +52,11 @@ DASHBOARD_CMD_TOKEN = os.getenv("DASHBOARD_CMD_TOKEN", "")
 
 # Anthropic API key for AI chat
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# Owner email — full access. Everyone else gets read-only guest mode.
+# Set via DASHBOARD_OWNER_EMAIL env var. Matched against Cloudflare Access
+# Cf-Access-Authenticated-User-Email header.
+OWNER_EMAIL = os.getenv("DASHBOARD_OWNER_EMAIL", "")
 
 # ── App Setup ────────────────────────────────────────────────────────────────
 
@@ -769,6 +774,25 @@ async def health_check():
 # These endpoints let the dashboard control the trading bot in real-time.
 # All POST requests are proxied to the bot's internal command API.
 
+# ── Role Detection ───────────────────────────────────────────────────────────
+
+def _get_user_role(request) -> str:
+    """Determine user role from Cloudflare Access email header.
+    Owner gets 'owner', everyone else gets 'guest'."""
+    email = request.headers.get("Cf-Access-Authenticated-User-Email", "")
+    if not OWNER_EMAIL:
+        return "owner"  # No owner configured — everyone is owner (dev mode)
+    return "owner" if email.lower() == OWNER_EMAIL.lower() else "guest"
+
+
+@app.get("/api/me")
+async def get_user_role(request: Request):
+    """Return the current user's role and email."""
+    email = request.headers.get("Cf-Access-Authenticated-User-Email", "unknown")
+    role = _get_user_role(request)
+    return {"email": email, "role": role}
+
+
 @app.get("/api/cmd/status")
 async def cmd_status():
     """Bot status: paused, disabled directions/pairs, config values."""
@@ -789,52 +813,70 @@ async def cmd_remediation_list():
     """List pending remediation recommendations."""
     return await bot_cmd("/cmd/remediation", method="GET")
 
+def _require_owner(request: Request):
+    """Raise 403 if the user is not the owner. Used on all write endpoints."""
+    if _get_user_role(request) != "owner":
+        raise HTTPException(status_code=403, detail="Read-only access — owner permission required")
+
+
 @app.post("/api/cmd/pause")
-async def cmd_pause():
+async def cmd_pause(request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/pause")
 
 @app.post("/api/cmd/resume")
-async def cmd_resume():
+async def cmd_resume(request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/resume")
 
 @app.post("/api/cmd/close-all")
-async def cmd_close_all():
+async def cmd_close_all(request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/close-all")
 
 @app.post("/api/cmd/close-pair")
-async def cmd_close_pair(body: dict):
+async def cmd_close_pair(body: dict, request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/close-pair", body=body)
 
 @app.post("/api/cmd/close-profitable")
-async def cmd_close_profitable():
+async def cmd_close_profitable(request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/close-profitable")
 
 @app.post("/api/cmd/close-losing")
-async def cmd_close_losing():
+async def cmd_close_losing(request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/close-losing")
 
 @app.post("/api/cmd/close/{deal_id}")
-async def cmd_close_single(deal_id: str):
+async def cmd_close_single(deal_id: str, request: Request):
+    _require_owner(request)
     return await bot_cmd(f"/cmd/close/{deal_id}")
 
 @app.post("/api/cmd/config")
-async def cmd_config(body: dict):
+async def cmd_config(body: dict, request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/config", body=body)
 
 @app.post("/api/cmd/remediation/{action_id}/approve")
-async def cmd_remediation_approve(action_id: int):
+async def cmd_remediation_approve(action_id: int, request: Request):
+    _require_owner(request)
     return await bot_cmd(f"/cmd/remediation/{action_id}/approve")
 
 @app.post("/api/cmd/remediation/{action_id}/reject")
-async def cmd_remediation_reject(action_id: int):
+async def cmd_remediation_reject(action_id: int, request: Request):
+    _require_owner(request)
     return await bot_cmd(f"/cmd/remediation/{action_id}/reject")
 
 @app.post("/api/cmd/enable-direction")
-async def cmd_enable_direction(body: dict):
+async def cmd_enable_direction(body: dict, request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/enable-direction", body=body)
 
 @app.post("/api/cmd/enable-pair")
-async def cmd_enable_pair(body: dict):
+async def cmd_enable_pair(body: dict, request: Request):
+    _require_owner(request)
     return await bot_cmd("/cmd/enable-pair", body=body)
 
 
@@ -849,14 +891,15 @@ _MAX_CHAT_HISTORY = 20
 
 
 @app.post("/api/chat")
-async def chat(body: dict):
-    """Send a message to Claude with full trading history context.
+async def chat(body: dict, request: Request):
+    """Send a message to Claude with context based on user role.
 
-    Injects comprehensive data from SQLite so Claude can answer questions
-    about any day, pair, or time period — not just today.
+    Owner: full trading history, config details, live data.
+    Guest: product overview, how AI works, high-level stats only.
     """
     message = body.get("message", "").strip()
     session_id = body.get("session_id") or str(uuid.uuid4())
+    role = _get_user_role(request)
 
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
@@ -1036,6 +1079,27 @@ async def chat(body: dict):
         "Format amounts as £. Keep responses under 500 words.\n\n"
         f"COMPLETE TRADING DATA:\n{context_text}"
     )
+
+    # Guest mode: product-focused system prompt, no sensitive data
+    if role == "guest":
+        system_prompt = (
+            "You are a friendly product assistant for an AI-powered forex trading bot. "
+            "A guest user is exploring the product. Answer their questions about:\n"
+            "- How the product works (14 data sources, LSTM neural network, Claude AI analysis)\n"
+            "- What makes it different (self-healing, automated remediation, FinBERT NLP)\n"
+            "- The technology stack (Python, Docker, React, PyTorch, Cloudflare)\n"
+            "- Trading concepts in simple terms\n"
+            "- What the dashboard shows and how to read the analytics\n\n"
+            "DO NOT share:\n"
+            "- Source code, config values, API keys, or internal implementation details\n"
+            "- Exact account balance, capital amount, or specific P&L figures\n"
+            "- How to replicate the system technically\n\n"
+            "If asked to set up a similar system, explain the concept at a high level and "
+            "suggest they speak to the product owner (Joseph) for details.\n\n"
+            "If asked about performance, you can share general stats like win rate % and "
+            "number of trades, but not exact £ amounts.\n\n"
+            "Be enthusiastic but honest. Keep responses under 300 words."
+        )
 
     # Get or create conversation history
     if session_id not in _chat_sessions:

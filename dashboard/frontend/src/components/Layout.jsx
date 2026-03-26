@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import RunningPL from './RunningPL'
 import { useApi } from '../hooks/useApi'
+import { useRole } from '../hooks/useRole'
 
 const navGroups = [
   {
@@ -22,7 +23,7 @@ const navGroups = [
       { to: '/heatmap', label: 'Heatmap' },
       { to: '/sessions', label: 'Sessions' },
       { to: '/correlations', label: 'Correlations' },
-      { to: '/risk', label: 'Risk Exposure' },
+      { to: '/risk', label: 'Risk Exposure', ownerOnly: true },
       { to: '/benchmark', label: 'Benchmark' },
     ],
   },
@@ -31,8 +32,8 @@ const navGroups = [
     items: [
       { to: '/chat', label: 'AI Chat' },
       { to: '/what-if', label: 'Mystic Wolf' },
-      { to: '/remediation', label: 'Remediation', badge: true },
-      { to: '/config', label: 'Config' },
+      { to: '/remediation', label: 'Remediation', badge: true, ownerOnly: true },
+      { to: '/config', label: 'Config', ownerOnly: true },
     ],
   },
   {
@@ -49,8 +50,10 @@ export default function Layout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const location = useLocation()
 
-  // Fetch remediation count for badge
-  const { data: remData } = useApi('/api/cmd/remediation', 30000)
+  const { isOwner, role, email } = useRole()
+
+  // Fetch remediation count for badge (owner only)
+  const { data: remData } = useApi(isOwner ? '/api/cmd/remediation' : null, 30000)
   const remCount = remData?.pending_actions?.length || 0
 
   // Close sidebar on navigation (mobile)
@@ -105,12 +108,15 @@ export default function Layout({ children }) {
           <p className="text-xs text-gray-500 mt-1">Dashboard v2.0</p>
         </Link>
         <div className="flex-1 py-2 overflow-y-auto">
-          {navGroups.map(group => (
+          {navGroups.map(group => {
+            const visibleItems = group.items.filter(item => !item.ownerOnly || isOwner)
+            if (visibleItems.length === 0) return null
+            return (
             <div key={group.label} className="mb-1">
               <p className="px-4 py-1.5 text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
                 {group.label}
               </p>
-              {group.items.map(({ to, label, badge }) => (
+              {visibleItems.map(({ to, label, badge }) => (
                 <NavLink
                   key={to}
                   to={to}
@@ -132,9 +138,14 @@ export default function Layout({ children }) {
                 </NavLink>
               ))}
             </div>
-          ))}
+          )})}
         </div>
         <div className="p-4 border-t border-gray-800 space-y-3">
+          {!isOwner && (
+            <div className="text-xs text-yellow-400/70 bg-yellow-900/20 rounded px-2 py-1.5">
+              Guest Mode — Read Only
+            </div>
+          )}
           <StatusIndicator />
           <button
             onClick={() => window.location.href = '/cdn-cgi/access/logout'}

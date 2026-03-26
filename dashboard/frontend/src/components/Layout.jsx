@@ -32,6 +32,7 @@ const navGroups = [
     items: [
       { to: '/chat', label: 'AI Chat' },
       { to: '/what-if', label: 'Mystic Wolf' },
+      { to: '/game', label: 'Trading Game' },
       { to: '/remediation', label: 'Remediation', badge: true, ownerOnly: true },
       { to: '/config', label: 'Config', ownerOnly: true },
     ],

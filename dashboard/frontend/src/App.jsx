@@ -19,6 +19,7 @@ import WhatIf from './pages/WhatIf'
 import Correlations from './pages/Correlations'
 import RiskExposure from './pages/RiskExposure'
 import ScanLog from './pages/ScanLog'
+import TradingGame from './pages/TradingGame'
 import Calendar from './pages/Calendar'
 import Benchmark from './pages/Benchmark'
 
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/correlations" element={<Correlations />} />
         <Route path="/risk" element={<RiskExposure />} />
         <Route path="/what-if" element={<WhatIf />} />
+        <Route path="/game" element={<TradingGame />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/remediation" element={<Remediation />} />
         <Route path="/config" element={<ConfigEditor />} />

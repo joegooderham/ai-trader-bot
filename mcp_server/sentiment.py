@@ -291,11 +291,17 @@ async def _fetch_headlines() -> list:
             logger.debug(f"News feed {feed_config['name']} unavailable: {e}")
 
     logger.info(f"Sentiment analysis: {len(all_headlines)} total headlines collected")
+
+    # Pre-score all headlines with FinBERT in the background so the cache
+    # is warm before the next confidence calculation needs them
+    _pre_score_all_headlines(all_headlines)
+
     return all_headlines
 
 
 def _score_with_finbert(headline: str) -> Optional[float]:
-    """Score a headline using FinBERT if available. Returns None if not loaded."""
+    """Score a headline using FinBERT if available. Returns cached result instantly
+    if pre-scored in background, otherwise scores in real-time."""
     try:
         from mcp_server.finbert_sentiment import score_headline, is_available
         if is_available():
@@ -305,6 +311,19 @@ def _score_with_finbert(headline: str) -> Optional[float]:
     except Exception:
         pass
     return None
+
+
+def _pre_score_all_headlines(headlines: list):
+    """Pre-score all fetched headlines with FinBERT in the background.
+    Called after fetching fresh headlines so the cache is warm
+    before the next confidence calculation needs them."""
+    try:
+        from mcp_server.finbert_sentiment import pre_score_headlines, is_available
+        if is_available():
+            titles = [h.get("title", "") for h in headlines if h.get("title")]
+            pre_score_headlines(titles)
+    except Exception:
+        pass
 
 
 def _parse_feed_date(date_str: str) -> Optional[datetime]:

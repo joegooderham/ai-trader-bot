@@ -34,7 +34,11 @@ app = FastAPI(title="AI Trader MCP Server", version="1.0.0")
 
 # In-memory cache to avoid re-fetching data on every single request
 _cache = {}
-CACHE_DURATION_SECONDS = config.MCP_CONFIG.get("cache_duration_minutes", 30) * 60
+# Context cache reduced from 30 min to 15 min for faster signal response.
+# Slow-moving signals (VIX, DXY, yield, FRED) have their own 1-hour internal
+# caches, so they won't re-fetch on every context request. Only fast-moving
+# signals (sentiment, IG positioning) benefit from the shorter cache.
+CACHE_DURATION_SECONDS = config.MCP_CONFIG.get("cache_duration_minutes", 15) * 60
 
 # Shared IG client — reused across all MCP modules to avoid creating a new
 # authenticated session on every request. Previously each module created its

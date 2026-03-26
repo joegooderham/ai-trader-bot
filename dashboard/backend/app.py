@@ -774,6 +774,11 @@ async def cmd_status():
     """Bot status: paused, disabled directions/pairs, config values."""
     return await bot_cmd("/cmd/status", method="GET")
 
+@app.get("/api/cmd/positions")
+async def cmd_positions():
+    """Live positions with real-time prices from IG broker (not yfinance)."""
+    return await bot_cmd("/cmd/positions", method="GET")
+
 @app.get("/api/cmd/balance")
 async def cmd_balance():
     """Account balance from IG broker."""

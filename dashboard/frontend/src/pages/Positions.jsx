@@ -4,9 +4,59 @@ import PLBadge from '../components/PLBadge'
 import TradeControls from '../components/TradeControls'
 import { useToast } from '../components/Toast'
 
+/**
+ * Merge IG live position data with DB position data.
+ * IG provides real-time prices and UPL (source of truth).
+ * DB provides confidence score, opened_at, and other metadata.
+ */
+function mergePositionData(igData, dbData) {
+  if (!igData?.positions && !dbData?.positions) return null
+  if (!igData?.positions) return dbData
+
+  const igPositions = igData.positions || []
+  const dbPositions = (dbData?.positions || [])
+
+  // Build lookup by deal_id from DB data
+  const dbMap = {}
+  for (const p of dbPositions) {
+    if (p.deal_id) dbMap[p.deal_id] = p
+  }
+
+  const merged = igPositions.map(ig => {
+    const db = dbMap[ig.dealId] || {}
+    return {
+      deal_id: ig.dealId,
+      pair: ig.pair || db.pair,
+      direction: ig.direction || db.direction,
+      fill_price: ig.level || db.fill_price,
+      current_price: ig.currentPrice || db.current_price,
+      size: ig.dealSize || db.size,
+      stop_loss: ig.stopLevel || db.stop_loss,
+      take_profit: ig.limitLevel || db.take_profit,
+      unrealized_pl: ig.unrealizedPL != null ? ig.unrealizedPL : db.unrealized_pl,
+      confidence_score: db.confidence_score,
+      opened_at: db.opened_at || ig.openTime,
+      status: db.status,
+    }
+  })
+
+  const totalUpl = merged.reduce((sum, p) => sum + (p.unrealized_pl || 0), 0)
+
+  return {
+    positions: merged,
+    total_unrealized_pl: totalUpl,
+    source: 'ig_live',
+  }
+}
+
 export default function Positions() {
   // Refresh every 15 seconds for near-real-time position updates
-  const { data, loading, error } = useApi('/api/positions/live', 15000)
+  // Use IG live positions (real-time prices from broker) instead of yfinance (delayed)
+  const { data: igData } = useApi('/api/cmd/positions', 15000)
+  const { data: dbData, loading, error } = useApi('/api/positions/live', 30000)
+
+  // Merge: prefer IG live data for prices/UPL, fall back to DB+yfinance
+  const data = mergePositionData(igData, dbData)
   const { execute, loading: cmdLoading } = useCommand()
   const { showToast, ToastComponent } = useToast()
 

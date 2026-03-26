@@ -92,6 +92,18 @@ def get_status(auth=Depends(verify_token)):
     }
 
 
+@app.get("/cmd/positions")
+def get_positions(auth=Depends(verify_token)):
+    """Live open positions with real-time prices directly from IG broker.
+    This is the single source of truth for unrealised P&L — no yfinance delay."""
+    try:
+        positions = _broker.get_open_trades()
+        return {"positions": positions, "source": "ig_live"}
+    except Exception as e:
+        logger.error(f"Command API positions failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @app.get("/cmd/balance")
 def get_balance(auth=Depends(verify_token)):
     """Account balance and equity from IG broker."""

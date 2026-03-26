@@ -8,7 +8,9 @@ export default function Overview() {
   // Auto-refresh every 30 seconds
   const { data, loading, error } = useApi('/api/overview', 30000)
   const { data: chartData } = useApi('/api/charts/pl-history?days=30')
-  const { data: liveData } = useApi('/api/positions/live', 30000)
+  const { data: liveData } = useApi('/api/positions/live', 60000)
+  // IG live positions for real-time UPL (not yfinance delayed)
+  const { data: igPositions } = useApi('/api/cmd/positions', 15000)
 
   if (loading) return <LoadingSkeleton />
   if (error) return <ErrorMessage error={error} />
@@ -48,7 +50,11 @@ export default function Overview() {
         />
         <StatCard
           label="Unrealized P&L"
-          value={<PLBadge value={liveData?.total_unrealized_pl || 0} />}
+          value={<PLBadge value={
+            igPositions?.positions
+              ? igPositions.positions.reduce((sum, p) => sum + (p.unrealizedPL || 0), 0)
+              : (liveData?.total_unrealized_pl || 0)
+          } />}
           sub={liveData?.prices_available ? 'Live from latest candles' : 'Prices unavailable'}
         />
       </div>

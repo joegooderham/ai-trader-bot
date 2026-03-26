@@ -37,7 +37,7 @@ Imagine you're trying to predict whether it will rain tomorrow. You'd look at th
 
 ```mermaid
 flowchart LR
-    subgraph Input["What the AI sees<br/>(25 data points per hour, 30 hours)"]
+    subgraph Input["What the AI sees<br/>(25+ data points per hour, 30 hours)"]
         A["📊 Price movements"]
         B["📈 Technical indicators<br/>(RSI, MACD, etc.)"]
         C["🕐 Time of day/week"]
@@ -87,7 +87,7 @@ flowchart TD
 Most trading bots use simple rules: "If RSI < 30, buy." That's pattern matching — it works sometimes but fails in changing markets.
 
 This LSTM is different because:
-- It sees **25 different signals simultaneously** (not just one indicator)
+- It sees **25+ different signals simultaneously** (not just one indicator)
 - It has a **self-attention mechanism** that can focus on the most important moment in the last 30 hours (e.g., a sudden spike 15 hours ago that's still relevant)
 - It **learns from real outcomes** — winning trades reinforce the pattern, losing trades teach it to avoid similar setups
 - It **retrains every 4 hours** — adapting to changing market conditions instead of using a static model
@@ -116,19 +116,29 @@ Each evening at 00:10 UTC, Claude generates a trading plan for the next day base
 - Current technical setups across all 10 pairs
 - The bot's recent performance patterns
 
-### News Sentiment Scoring
+### News Sentiment Scoring (FinBERT NLP)
 
-When the bot scans headlines from financial news feeds (FX Street, ForexLive, Investing.com), it uses keyword analysis to score each headline as bullish, bearish, or neutral for each currency:
+The bot uses **FinBERT**, an open-source NLP model fine-tuned for financial text, to analyse news headlines from FX Street, ForexLive, and Investing.com. Unlike simple keyword matching, FinBERT understands context and nuance in financial language — it can tell the difference between "rates may rise" (hawkish) and "rates may rise less than expected" (dovish).
 
 ```mermaid
 flowchart LR
-    NEWS["📰 65+ headlines<br/>from 3 news feeds"] --> SCORE["Score each headline<br/>for each currency"]
-    SCORE --> AGG["Aggregate per pair"]
+    NEWS["📰 65+ headlines<br/>from 3 news feeds"] --> FINBERT["🤖 FinBERT NLP<br/>Understands financial context"]
+    FINBERT --> AGG["Aggregate per pair"]
     AGG --> RESULT["EUR/USD: Bullish +0.4<br/>GBP/USD: Bearish -0.3<br/>USD/JPY: Neutral"]
-    RESULT --> CONF["Adjusts confidence<br/>+8 if aligned<br/>-10 if opposed"]
+    RESULT --> CONF["Adjusts confidence<br/>+5 if aligned<br/>-5 if opposed"]
 
+    style FINBERT fill:#7c3aed,stroke:#8b5cf6,color:#fff
     style CONF fill:#7c3aed,stroke:#8b5cf6,color:#fff
 ```
+
+### Macro & Cross-Market Signals
+
+Beyond news, the MCP server fetches broader market indicators that feed into both the LSTM features and the confidence modifiers:
+
+- **VIX (Fear Index)** — measures market fear; spikes reduce confidence, calm markets boost it
+- **DXY (Dollar Index)** — USD strength proxy; alignment with trade direction boosts confidence
+- **Treasury Yield Spread (2Y/10Y)** — yield curve inversion signals recession risk
+- **Fear & Greed Index** — extreme readings flag overbought/oversold market conditions
 
 ---
 
@@ -221,7 +231,7 @@ Putting it all together — here's every AI touchpoint in a single trade:
 flowchart TD
     SCAN["⏰ Market Scan"] --> LSTM_P["🧠 LSTM predicts BUY<br/>72% probability<br/>(50% of score)"]
     SCAN --> TECH["📐 Technical indicators<br/>confirm BUY signal<br/>(50% of score)"]
-    SCAN --> MCP["🔬 MCP Context:<br/>News: bullish (+8)<br/>IG crowd: 75% short (+8)<br/>FRED: carry trade (+5)<br/>COT: institutions long (+5)"]
+    SCAN --> MCP["🔬 MCP Context (14 sources):<br/>FinBERT: bullish (+5)<br/>IG crowd: 75% short (+8)<br/>FRED: carry trade (+5)<br/>COT: institutions long (+5)<br/>VIX: calm (+3), DXY: aligned (+5)"]
 
     LSTM_P --> SCORE["⚖️ Confidence: 91%<br/>(above 85% threshold)"]
     TECH --> SCORE

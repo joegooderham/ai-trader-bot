@@ -15,8 +15,8 @@ flowchart TD
     DISABLED -->|No| CANDLES["📊 Fetch 60 H1 candles<br/>from IG (cached, top-up 3)"]
 
     CANDLES --> TECH["📐 Technical Indicators<br/>RSI, MACD, BB, EMA, ATR, Volume"]
-    TECH --> LSTM["🧠 LSTM Prediction<br/>25 features → BUY/SELL/HOLD"]
-    LSTM --> MCP["🔬 MCP Context<br/>9 external data sources"]
+    TECH --> LSTM["🧠 LSTM Prediction<br/>25+ features → BUY/SELL/HOLD"]
+    LSTM --> MCP["🔬 MCP Context<br/>14 data sources"]
     MCP --> SCORE["⚖️ Confidence Score<br/>0-100% weighted composite"]
 
     SCORE --> THRESHOLD{"Score ≥ 85%?"}
@@ -63,6 +63,11 @@ Applied after the base score. Can push the score up or down:
 | Volatility Regime | ATR ratio analysis | +5 (low/calm) | -15 (extreme) |
 | Session Performance | Historical pair/session data | +5 (good session) | -5 (bad session) |
 | Correlation Risk | Position overlap check | — | -10 (correlated open) |
+| VIX (Fear Index) | yfinance ^VIX | +3 (calm market) | -8 (VIX spike) |
+| DXY (Dollar Index) | yfinance DX-Y.NYB | +5 (aligned with USD direction) | -5 (opposed) |
+| Treasury Yield Spread | FRED 2Y/10Y | +3 (normal yield curve) | -5 (inversion) |
+| Fear & Greed Index | CNN API | +5 (aligned with direction) | -5 (extreme reading) |
+| FinBERT NLP Sentiment | Open-source NLP model | +5 (headlines aligned) | -5 (headlines opposed) |
 
 ## Position Sizing
 

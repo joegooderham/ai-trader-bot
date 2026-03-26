@@ -8,7 +8,7 @@ The AI brain that predicts market direction. Contributes 50% of every trade deci
 
 ```mermaid
 graph TD
-    subgraph Input["📥 25 Features × 30 Candles"]
+    subgraph Input["📥 25+ Features × 30 Candles"]
         direction TB
         TECH["12 Technical<br/>RSI, MACD, Bollinger, EMA,<br/>ATR, Volume, Price Change"]
         TIME["4 Time Encoding<br/>Hour sin/cos, Day sin/cos"]
@@ -16,7 +16,7 @@ graph TD
         EXTERNAL["7 External<br/>IG sentiment, Myfxbook,<br/>COT, FRED, Volatility,<br/>H4 trend, H4 RSI"]
     end
 
-    SEQ["30-Candle Sequence<br/>(25 features each)"]
+    SEQ["30-Candle Sequence<br/>(25+ features each)"]
 
     subgraph Model["🧠 LSTM Model"]
         L1["LSTM Layer 1<br/>96 hidden units"]
@@ -37,7 +37,7 @@ graph TD
     style OUT fill:#059669,stroke:#10b981,color:#fff
 ```
 
-## Features (25 per candle)
+## Features (25+ per candle)
 
 ### Base Technical (1-12)
 | # | Feature | What it measures |
@@ -75,6 +75,14 @@ graph TD
 | 23 | volatility_regime | Market volatility state (0-1 ordinal) |
 | 24 | htf_trend | H4 timeframe trend direction (-1/0/+1) |
 | 25 | htf_rsi | H4 RSI (normalised 0-1) |
+
+### New External Signals (26-29)
+| # | Feature | What it measures |
+|---|---------|-----------------|
+| 26 | vix_norm | VIX fear index (normalised 0-1) — market risk level |
+| 27 | dxy_change | DXY Dollar Index rate of change — USD strength/weakness |
+| 28 | yield_spread | Treasury 2Y/10Y yield spread — recession/expansion signal |
+| 29 | fear_greed | CNN Fear & Greed Index (normalised 0-1) — market sentiment extreme |
 
 ## Self-Attention Mechanism
 
@@ -142,7 +150,7 @@ Both scores are logged. The indicator-only score drives trade decisions. Once LS
 |-----------|-------|
 | Architecture | 2-layer LSTM + self-attention |
 | Hidden units | 96 per layer |
-| Input features | 25 |
+| Input features | 25+ (18 base + 7 external + 4 new external) |
 | Sequence length | 30 candles |
 | Parameters | ~119,000 |
 | Dropout | 0.3 |

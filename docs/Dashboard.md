@@ -30,6 +30,8 @@ graph TB
         MW["Mystic Wolf<br/>What-if simulator"]
         REM["Remediation<br/>Approve/reject fixes"]
         CONF["Config<br/>Live parameter editor"]
+        HEALTH["Health Audit<br/>System health checks"]
+        INTEG["Integrity<br/>Performance reviews"]
     end
 
     subgraph Docs["📚 Docs"]
@@ -101,6 +103,23 @@ flowchart LR
 
     style DASH fill:#059669,stroke:#10b981,color:#fff
 ```
+
+### Health Audit
+Scheduled twice daily (09:00 + 17:00 UTC). Checks:
+- Bot and MCP server responsiveness
+- IG API connectivity
+- LSTM model age and accuracy
+- Disk space and database size
+- Open position reconciliation
+
+Results displayed on the Health Audit page with status badges and historical trend.
+
+### Integrity Reviews
+Runs every 3 hours (aligned with market scans) plus a deep review every 6 hours. Analyses:
+- Win rate trends by pair and direction
+- P&L trajectory and drawdown levels
+- LSTM prediction accuracy vs baseline
+- Remediation recommendation history
 
 ## Tech Stack
 

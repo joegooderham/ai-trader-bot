@@ -65,23 +65,27 @@ graph LR
 **ATR** — How much the price typically moves. Used to set stop-losses at a sensible distance.
 
 ### 3. Ask the AI Brain (LSTM Neural Network)
-The bot has a real neural network that looks at the last 30 hours of data (25 features per hour) and predicts: **will the price go up, down, or sideways?**
+The bot has a real neural network that looks at the last 30 hours of data (25+ features per hour) and predicts: **will the price go up, down, or sideways?**
 
 This contributes **50% of the confidence score** — it's the single biggest input.
 
 The LSTM retrains every 4 hours on fresh data, and it learns from the bot's actual trade results: winning patterns get reinforced, losing patterns get corrected.
 
-### 4. Check the Market Context (9 Data Sources)
+### 4. Check the Market Context (14 Data Sources)
 Before deciding, the bot consults its "research desk" — the MCP server:
 
 ```mermaid
 graph TD
     MCP["🔬 MCP Server"] --> EC["📅 Economic Calendar<br/>Major news events?"]
-    MCP --> NS["📰 News Sentiment<br/>Bullish or bearish?"]
+    MCP --> NS["📰 FinBERT NLP Sentiment<br/>AI reads news headlines"]
     MCP --> IG["👥 IG Client Sentiment<br/>What are retail traders doing?"]
     MCP --> MFX["👥 Myfxbook Sentiment<br/>100k traders' positions"]
     MCP --> COT["🏦 CFTC COT Data<br/>What are hedge funds doing?"]
     MCP --> FRED["💵 FRED Macro<br/>Interest rate differentials"]
+    MCP --> VIX_N["😱 VIX Fear Index<br/>Market fear level"]
+    MCP --> DXY_N["💲 DXY Dollar Index<br/>USD strength proxy"]
+    MCP --> YIELD_N["📉 Treasury Yield Spread<br/>2Y/10Y recession signal"]
+    MCP --> FNG_N["🎭 Fear & Greed Index<br/>Market sentiment extreme?"]
     MCP --> VOL["📊 Volatility Regime<br/>Calm or stormy?"]
     MCP --> SESS["🕐 Session Stats<br/>Good time for this pair?"]
     MCP --> CORR["🔗 Correlation Risk<br/>Already holding similar?"]
@@ -102,7 +106,7 @@ pie title Confidence Score Components
     "Volume" : 5
 ```
 
-Then the 9 MCP context signals adjust it — boosting aligned signals, penalising conflicting ones. The bot **only trades if the final score is 85% or above**.
+Then the 14 MCP context signals adjust it — boosting aligned signals, penalising conflicting ones. The bot **only trades if the final score is 85% or above**.
 
 ### 6. Size the Trade Safely
 The rule: **risk only 2% of capital on any single trade** (£10 on £500).
@@ -198,7 +202,7 @@ Traditional trading bots: "RSI below 30 = always buy." That's pattern matching. 
 This bot is different:
 
 1. **It understands context** — a buy signal during a major news event is completely different from the same signal on a quiet day
-2. **9 independent data sources must agree** — no single indicator can trigger a trade
+2. **14 independent data sources must agree** — no single indicator can trigger a trade
 3. **The AI learns from its mistakes** — losing trades get fed back into the LSTM so it learns to avoid those setups
 4. **It self-heals** — detects when a strategy stops working and recommends fixes
 5. **It knows when to sit out** — at 85% confidence threshold, most scans result in doing nothing. Sitting on your hands when uncertain is one of the hardest things in trading.

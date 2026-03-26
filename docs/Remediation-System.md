@@ -64,6 +64,13 @@ Checks model age, prediction accuracy, LSTM edge. Recommends shadow mode toggle 
 ### 5. Auto-Pause (Autonomous)
 If weekly P&L drops below -£50 — **immediately pauses trading without approval**. The only autonomous action.
 
+### 6. Drawdown Protection
+Monitors equity drawdown from peak. When equity drops 5% from its high-water mark:
+- Tightens risk per trade (reduces position sizes)
+- Raises confidence threshold temporarily
+- Alerts via Telegram with drawdown details
+- Automatically relaxes when equity recovers
+
 ## Action Types
 
 | Type | What it does | Restart needed? |
@@ -89,4 +96,4 @@ The auto-optimiser has hard limits to prevent runaway escalation:
 
 - **Telegram**: Inline buttons on integrity scan messages
 - **Dashboard**: Remediation page (Tools → Remediation)
-- **Config**: `remediation.auto_approve: false` requires manual approval
+- **Config**: `remediation.auto_approve: true` (currently ON) — remediation actions are applied automatically without manual approval. Set to `false` to require manual approval via Telegram buttons

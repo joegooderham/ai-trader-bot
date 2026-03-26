@@ -6,7 +6,7 @@ A comprehensive overview of the system for technical and non-technical audiences
 
 ## What It Does
 
-An AI-powered forex trading bot that scans 10 currency pairs every 3 hours, uses 9 data sources and a neural network to make trade decisions, and manages risk automatically. Controlled via Telegram and a web dashboard.
+An AI-powered forex trading bot that scans 10 currency pairs every 3 hours, uses 14 data sources and a neural network to make trade decisions, and manages risk automatically. Controlled via Telegram and a web dashboard.
 
 ---
 
@@ -21,6 +21,10 @@ graph TB
         FRED["📊 FRED<br/>Interest Rates"]
         MFX["📊 Myfxbook<br/>Sentiment"]
         COT["📊 CFTC<br/>Institutional Data"]
+        VIX_S["📊 VIX<br/>Fear Index"]
+        DXY_S["📊 DXY<br/>Dollar Index"]
+        YIELD["📊 Treasury<br/>Yield Spread"]
+        FNG["📊 Fear & Greed<br/>Index"]
     end
 
     subgraph Docker["🐳 Docker Network"]
@@ -54,6 +58,10 @@ graph TB
     MCP -->|"Rates"| FRED
     MCP -->|"Sentiment"| MFX
     MCP -->|"Positioning"| COT
+    MCP -->|"Volatility"| VIX_S
+    MCP -->|"USD strength"| DXY_S
+    MCP -->|"Bonds"| YIELD
+    MCP -->|"Sentiment"| FNG
 
     BOT --> DB
     BOT --> CONFIG
@@ -84,9 +92,9 @@ flowchart TD
 
     INDICATORS[📐 Calculate Technical Indicators<br/>RSI, MACD, Bollinger, EMA, ATR, Volume] --> LSTM
 
-    LSTM[🧠 LSTM Neural Network<br/>Predicts BUY/SELL/HOLD<br/>25 features, 30-candle sequence] --> MCP_CTX
+    LSTM[🧠 LSTM Neural Network<br/>Predicts BUY/SELL/HOLD<br/>25+ features, 30-candle sequence] --> MCP_CTX
 
-    MCP_CTX[🔬 Fetch Market Context<br/>9 data sources from MCP Server] --> CONFIDENCE
+    MCP_CTX[🔬 Fetch Market Context<br/>14 data sources from MCP Server] --> CONFIDENCE
 
     CONFIDENCE[⚖️ Calculate Confidence Score<br/>0-100% weighted composite] --> CHECK{Score ≥ 85%?}
 
@@ -125,7 +133,7 @@ pie title Confidence Score Components
     "Volume" : 5
 ```
 
-After the base score, **9 MCP context signals** adjust it up or down:
+After the base score, **14 MCP context signals** adjust it up or down:
 
 ```mermaid
 graph LR
@@ -137,6 +145,11 @@ graph LR
         A5["COT institutional +5"]
         A6["Good session +5"]
         A7["Low volatility +5"]
+        A8["VIX calm +3"]
+        A9["DXY aligned +5"]
+        A10["Yield spread aligned +3"]
+        A11["Fear & Greed aligned +5"]
+        A12["FinBERT sentiment +5"]
     end
 
     subgraph Penalty["🔴 Penalty Signals (-points)"]
@@ -149,6 +162,11 @@ graph LR
         B7["FRED against carry -5"]
         B8["Myfxbook crowd -5"]
         B9["Bad session -5"]
+        B10["VIX spike -8"]
+        B11["DXY opposed -5"]
+        B12["Yield inversion -5"]
+        B13["Fear & Greed extreme -5"]
+        B14["FinBERT opposed -5"]
     end
 
     BASE["Base Score<br/>0-100%"] --> Boost --> FINAL
@@ -166,11 +184,12 @@ The AI brain that predicts market direction. Contributes 50% of the confidence s
 
 ```mermaid
 graph TD
-    subgraph Input["📥 Input: 25 Features per Candle"]
+    subgraph Input["📥 Input: 25+ Features per Candle"]
         F1["Technical: RSI, MACD, Bollinger,<br/>EMA, ATR, Volume (12 features)"]
         F2["Time: Hour + Day encoding (4 features)"]
         F3["Derived: RSI momentum, MACD distance,<br/>EMA cross momentum (2 features)"]
         F4["External: IG sentiment, Myfxbook,<br/>COT, FRED, Volatility, H4 trend (7 features)"]
+        F5["New External: VIX, DXY,<br/>Treasury yield, Fear & Greed (4 features)"]
     end
 
     subgraph Model["🧠 LSTM Model (~119k parameters)"]
@@ -189,7 +208,7 @@ graph TD
         T4["Hot-swaps live model<br/>No restart needed"]
     end
 
-    F1 & F2 & F3 & F4 --> SEQ["30-Candle Sequence"]
+    F1 & F2 & F3 & F4 & F5 --> SEQ["30-Candle Sequence"]
     SEQ --> L1 --> L2 --> ATT --> BN --> DROP --> OUT
 
     T1 & T2 & T3 --> T4
@@ -316,6 +335,11 @@ flowchart LR
         FRED_D["FRED<br/>(interest rates)"]
         MFX_D["Myfxbook<br/>(retail sentiment)"]
         COT_D["CFTC<br/>(institutional data)"]
+        VIX_D["VIX<br/>(fear index)"]
+        DXY_D["DXY<br/>(dollar index)"]
+        YIELD_D["Treasury<br/>(yield spread)"]
+        FNG_D["Fear & Greed<br/>(market sentiment)"]
+        FINBERT_D["FinBERT<br/>(NLP headlines)"]
     end
 
     subgraph Processing["Processing"]
@@ -335,7 +359,7 @@ flowchart LR
 
     IG --> BOT_D
     YF -.->|fallback| BOT_D
-    FRED_D & MFX_D & COT_D --> MCP_D
+    FRED_D & MFX_D & COT_D & VIX_D & DXY_D & YIELD_D & FNG_D & FINBERT_D --> MCP_D
     MCP_D --> BOT_D
     BOT_D --> DB_D
     BOT_D --> TG_D
@@ -390,8 +414,14 @@ graph LR
 | Currency pairs | 10 (EUR/USD, GBP/USD, USD/JPY, + 7 more) |
 | Scan frequency | Every 3 hours |
 | Confidence threshold | 85% minimum to trade |
-| Data sources | 9 (technicals, LSTM, IG sentiment, Myfxbook, COT, FRED, calendar, volatility, sessions) |
-| LSTM features | 25 per candle (18 technical + 7 external) |
+| Data sources | 14 (LSTM, technicals, IG sentiment, Myfxbook, COT, FRED, VIX, DXY, Treasury yield, Fear & Greed, FinBERT NLP, calendar, volatility regime, session performance) |
+| LSTM features | 25+ per candle (18 base + 7 external signals) |
+| Daily profit target | £20 (bank and pause when hit) |
+| Position reconciliation | Every 5 minutes |
+| Health audit | Twice daily (09:00 + 17:00 UTC) |
+| Integrity review | Every 3 hours (aligned with scans) |
+| Deep review | Every 6 hours |
+| Dashboard pages | 20 |
 | Risk per trade | 2% of capital (£10 on £500) |
 | Stop-loss | 2.0× ATR (adapts to volatility) |
 | Reward:risk | 2:1 minimum |
@@ -435,7 +465,8 @@ mindmap
     AI
       Claude Sonnet (chat + analysis)
       LSTM (trade predictions)
-      25 input features
+      FinBERT (NLP sentiment)
+      25+ input features
       Self-attention mechanism
 ```
 

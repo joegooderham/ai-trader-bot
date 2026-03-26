@@ -62,6 +62,10 @@ flowchart TD
     MCP -->|"HTTPS"| MFX["Myfxbook"]
     MCP -->|"HTTPS"| COT["CFTC/Nasdaq"]
     MCP -->|"HTTPS"| NEWS["RSS Feeds"]
+    MCP -->|"HTTPS"| VIX_I["VIX / DXY<br/>(yfinance)"]
+    MCP -->|"HTTPS"| YIELD_I["Treasury Yields<br/>(FRED)"]
+    MCP -->|"HTTPS"| FNG_I["Fear & Greed<br/>(CNN)"]
+    MCP -->|"Local"| FINBERT_I["FinBERT NLP<br/>(transformers)"]
 
     style CF fill:#dc2626,stroke:#ef4444,color:#fff
     style DASH fill:#059669,stroke:#10b981,color:#fff
@@ -109,3 +113,33 @@ Single SQLite file (`data_store/trader.db`) with tables:
 | `overnight_holds` | ~5 | Positions held past EOD |
 
 Current size: **~2.2 MB**. Projected: ~200 MB/year.
+
+## Key Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `torch` / `pytorch` | LSTM neural network training and inference |
+| `transformers` | FinBERT NLP model for news headline sentiment analysis |
+| `fastapi` / `uvicorn` | MCP server and dashboard backend |
+| `apscheduler` | Job scheduling (scans, retrains, health audits) |
+| `yfinance` | Fallback candle data, VIX, DXY feeds |
+| `python-telegram-bot` | Telegram bot integration |
+| `anthropic` | Claude AI API for chat and analysis |
+| `fredapi` | FRED macro data (interest rates, yield spreads) |
+
+## Scheduled Jobs
+
+| Job | Interval | Description |
+|-----|----------|-------------|
+| Market scan | Every 3 hours | Evaluate all pairs, place trades |
+| Position reconciliation | Every 5 minutes | Sync open positions with broker |
+| LSTM retrain | Every 4 hours | Retrain model on fresh data |
+| Integrity review | Every 3 hours | Check performance, recommend fixes |
+| Deep review | Every 6 hours | Comprehensive performance analysis |
+| Health audit | Twice daily (09:00 + 17:00 UTC) | System health checks |
+| Outcome resolution | Every 60 minutes | Resolve LSTM prediction outcomes |
+| Drift check | Every 30 minutes | LSTM accuracy drift detection |
+| Analytics snapshot | Every 60 minutes | Rolling performance metrics |
+| EOD evaluation | 23:45 UTC | Re-score open positions |
+| EOD close | 23:59 UTC | Force close non-held positions |
+| Daily report | 00:05 UTC | Send daily P&L report |

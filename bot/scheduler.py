@@ -1445,6 +1445,194 @@ def _get_mcp_context(pair: str) -> dict:
         return {}
 
 
+def daily_strategy_review():
+    """
+    Daily 17:00 UTC — comprehensive strategy feedback sent to Telegram.
+
+    Analyses the day's trading performance, data quality, decision making,
+    and provides specific recommendations with a ready-to-paste Claude Code
+    prompt if changes are needed.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        today = now.strftime("%Y-%m-%d")
+        day_name = now.strftime("%A")
+
+        # Skip weekends
+        if now.weekday() >= 5:
+            return
+
+        # Gather today's data
+        today_trades = storage.get_trades_for_date(today)
+        closed = [t for t in today_trades if t.get("closed_at")]
+        open_t = [t for t in today_trades if not t.get("closed_at")]
+
+        total_pl = sum(t.get("pl", 0) for t in closed)
+        wins = sum(1 for t in closed if (t.get("pl") or 0) > 0.01)
+        losses = sum(1 for t in closed if (t.get("pl") or 0) < -0.01)
+        breakeven = sum(1 for t in closed if abs(t.get("pl") or 0) <= 0.01)
+        win_rate = wins / len(closed) * 100 if closed else 0
+
+        # Week totals
+        week_trades = storage.get_trades_for_week()
+        week_closed = [t for t in week_trades if t.get("closed_at")]
+        week_pl = sum(t.get("pl", 0) for t in week_closed)
+        week_wins = sum(1 for t in week_closed if (t.get("pl") or 0) > 0.01)
+        week_wr = week_wins / len(week_closed) * 100 if week_closed else 0
+
+        # Per-pair today
+        pair_pl = {}
+        for t in closed:
+            pair = t.get("pair", "?")
+            pair_pl[pair] = pair_pl.get(pair, 0) + (t.get("pl") or 0)
+
+        # Direction split today
+        buy_pl = sum(t.get("pl", 0) for t in closed if t.get("direction") == "BUY")
+        sell_pl = sum(t.get("pl", 0) for t in closed if t.get("direction") == "SELL")
+        buy_count = sum(1 for t in closed if t.get("direction") == "BUY")
+        sell_count = sum(1 for t in closed if t.get("direction") == "SELL")
+
+        # Average confidence of trades
+        confidences = [t.get("confidence_score", 0) for t in closed if t.get("confidence_score")]
+        avg_conf = sum(confidences) / len(confidences) if confidences else 0
+
+        # Close reasons
+        reasons = {}
+        for t in closed:
+            r = t.get("close_reason", "unknown")
+            reasons[r] = reasons.get(r, 0) + 1
+
+        # Build feedback message
+        pl_emoji = "📈" if total_pl >= 0 else "📉"
+        week_emoji = "📈" if week_pl >= 0 else "📉"
+
+        msg = (
+            f"*{pl_emoji} DAILY STRATEGY REVIEW — {day_name} {today}*\n"
+            f"═════════════════════\n\n"
+        )
+
+        # Today's performance
+        msg += f"*Today:*\n"
+        if not closed:
+            msg += f"  No trades closed today.\n"
+        else:
+            msg += (
+                f"  Trades: {len(closed)} ({wins}W / {losses}L / {breakeven}BE)\n"
+                f"  Win rate: {win_rate:.0f}%\n"
+                f"  P&L: {'+'if total_pl >= 0 else ''}£{total_pl:.2f}\n"
+                f"  Avg confidence: {avg_conf:.0f}%\n"
+            )
+        if open_t:
+            msg += f"  Open positions: {len(open_t)}\n"
+
+        # Direction breakdown
+        if buy_count or sell_count:
+            msg += f"\n*Direction:*\n"
+            if buy_count:
+                msg += f"  BUY: {buy_count} trades, {'+'if buy_pl >= 0 else ''}£{buy_pl:.2f}\n"
+            if sell_count:
+                msg += f"  SELL: {sell_count} trades, {'+'if sell_pl >= 0 else ''}£{sell_pl:.2f}\n"
+
+        # Per-pair
+        if pair_pl:
+            msg += f"\n*By pair:*\n"
+            for pair, pl in sorted(pair_pl.items(), key=lambda x: x[1], reverse=True):
+                emoji = "✅" if pl > 0 else ("❌" if pl < 0 else "➡️")
+                msg += f"  {emoji} {pair.replace('_', '/')}: {'+'if pl >= 0 else ''}£{pl:.2f}\n"
+
+        # Close reasons
+        if reasons:
+            msg += f"\n*Close reasons:*\n"
+            for r, c in sorted(reasons.items(), key=lambda x: -x[1]):
+                msg += f"  {r}: {c}\n"
+
+        # Week running total
+        msg += (
+            f"\n*{week_emoji} Week so far:*\n"
+            f"  {len(week_closed)} trades, {week_wr:.0f}% win rate\n"
+            f"  P&L: {'+'if week_pl >= 0 else ''}£{week_pl:.2f}\n"
+        )
+
+        # Current config
+        msg += (
+            f"\n*Current config:*\n"
+            f"  Confidence: {config.MIN_CONFIDENCE_SCORE}%\n"
+            f"  Risk: {config.PER_TRADE_RISK_PCT}%\n"
+            f"  SL: {config.STOP_LOSS_ATR_MULTIPLIER}x ATR\n"
+            f"  Scan: every {config.SCAN_INTERVAL_MINUTES} min\n"
+        )
+        if config.DISABLED_DIRECTIONS:
+            msg += f"  Disabled: {', '.join(sorted(config.DISABLED_DIRECTIONS))}\n"
+        if config.DISABLED_PAIRS:
+            msg += f"  Disabled pairs: {', '.join(sorted(config.DISABLED_PAIRS))}\n"
+
+        # ── Generate recommendations ─────────────────────────────────────
+        recommendations = []
+        prompt_parts = []
+
+        if len(closed) == 0 and now.weekday() < 5:
+            recommendations.append("No trades today — confidence threshold may be too high")
+            prompt_parts.append("lower confidence from 85% to 80%")
+
+        if win_rate < 40 and len(closed) >= 3:
+            recommendations.append(f"Win rate {win_rate:.0f}% is low — consider raising confidence")
+            prompt_parts.append(f"raise confidence to {min(config.MIN_CONFIDENCE_SCORE + 5, 95)}%")
+
+        if breakeven > len(closed) * 0.5 and len(closed) >= 3:
+            recommendations.append(f"{breakeven} breakeven trades — trailing stops may be too tight")
+            prompt_parts.append("widen trailing stop from current value to 2.0x ATR")
+
+        if sell_count > 0 and sell_pl < -5:
+            recommendations.append(f"SELL trades losing £{abs(sell_pl):.2f} — consider disabling SELL")
+            prompt_parts.append("disable SELL trades")
+
+        if buy_count > 0 and buy_pl < -5:
+            recommendations.append(f"BUY trades losing £{abs(buy_pl):.2f} — consider disabling BUY")
+            prompt_parts.append("disable BUY trades")
+
+        # Worst pair
+        if pair_pl:
+            worst_pair = min(pair_pl.items(), key=lambda x: x[1])
+            if worst_pair[1] < -3:
+                recommendations.append(f"{worst_pair[0].replace('_', '/')} lost £{abs(worst_pair[1]):.2f} — consider removing")
+                prompt_parts.append(f"disable {worst_pair[0]} pair")
+
+        if total_pl > 0 and win_rate >= 50:
+            recommendations.append("Good day — no changes recommended. Keep current settings.")
+
+        if week_pl > 0 and week_wr >= 50:
+            recommendations.append("Profitable week so far — strategy is working.")
+
+        # Add recommendations
+        if recommendations:
+            msg += f"\n*💡 Assessment:*\n"
+            for r in recommendations:
+                msg += f"  • {r}\n"
+
+        # Generate Claude Code prompt
+        if prompt_parts and total_pl < 0:
+            prompt = "; ".join(prompt_parts)
+            msg += (
+                f"\n*🔧 If you want to make changes, paste this into Claude Code:*\n"
+                f"`Based on today's trading results ({len(closed)} trades, {win_rate:.0f}% win rate, "
+                f"£{total_pl:.2f} P&L), please: {prompt}. Deploy the changes.`\n"
+            )
+        elif total_pl >= 0:
+            msg += (
+                f"\n*✅ No changes needed — profitable day.*\n"
+                f"_If you want to review anything, paste into Claude Code:_\n"
+                f"`Review today's trading performance and suggest any optimisations.`\n"
+            )
+
+        msg += f"\n_{now.strftime('%H:%M UTC')}_"
+
+        notifier._send_system(msg)
+        logger.info(f"Daily strategy review sent: {len(closed)} trades, £{total_pl:.2f}")
+
+    except Exception as e:
+        logger.error(f"Daily strategy review failed: {e}")
+
+
 # ── Scheduler Setup ───────────────────────────────────────────────────────────
 
 def main():
@@ -1598,6 +1786,15 @@ def main():
         daily_health_audit,
         CronTrigger(hour=17, minute=0),
         id="health_audit_afternoon", name="Health Audit (Afternoon)"
+    )
+
+    # Daily strategy review — 17:00 UTC (5pm UK)
+    # Analyses day's performance, generates recommendations, and provides
+    # a ready-to-paste Claude Code prompt if changes are needed
+    scheduler.add_job(
+        daily_strategy_review,
+        CronTrigger(hour=17, minute=0),
+        id="daily_strategy_review", name="Daily Strategy Review (5pm)"
     )
 
     logger.info("📅 Scheduler started with the following jobs:")

@@ -700,6 +700,27 @@ def monitor_positions():
         except Exception as e:
             logger.error(f"Daily profit target check failed: {e}")
 
+    # ── Position Reconciliation ─────────────────────────────────────────────
+    # Every 5 minutes, check that DB and IG agree on what's open.
+    # If IG closed a position (stop/TP hit) but the DB missed the update,
+    # mark it as closed. This is the single source of truth mechanism.
+    try:
+        ig_deal_ids = {t.get("dealId") for t in (open_trades or [])}
+        db_open = storage.get_open_trades_from_db()
+        for db_trade in db_open:
+            deal_id = db_trade.get("deal_id") or db_trade.get("trade_id")
+            if deal_id and deal_id not in ig_deal_ids:
+                pair = db_trade.get("pair", "Unknown")
+                logger.warning(f"Reconciliation: #{db_trade.get('id')} {pair} ({deal_id}) closed on IG but DB still shows open — fixing")
+                storage.update_trade(deal_id, {
+                    "closed_at": datetime.now(timezone.utc).isoformat(),
+                    "close_reason": "Broker closed (stop/TP hit)",
+                    "status": "CLOSED",
+                    "pl": 0,  # Unknown P&L — IG doesn't tell us retrospectively
+                })
+    except Exception as e:
+        logger.debug(f"Position reconciliation failed: {e}")
+
     if not open_trades:
         return
 

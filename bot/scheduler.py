@@ -1304,6 +1304,136 @@ def daily_lstm_health():
         logger.error(f"Daily LSTM health check failed: {e}")
 
 
+def daily_health_audit():
+    """
+    Proactive health audit — runs at 09:00 and 17:00 UTC.
+
+    Checks everything is in sync and working:
+    1. DB vs IG position reconciliation
+    2. IG API connectivity
+    3. MCP server reachability
+    4. Config consistency (runtime vs YAML)
+    5. Today's trading summary
+    6. LSTM model status
+    7. Data source health
+
+    Sends a single Telegram summary with pass/fail per check.
+    """
+    now = datetime.now(timezone.utc)
+    checks = []
+
+    # 1. Position sync — DB vs IG
+    try:
+        open_ig = broker.get_open_trades()
+        ig_deal_ids = {t.get("dealId") for t in open_ig}
+        db_open = storage.get_open_trades_from_db()
+        db_deal_ids = {t.get("deal_id") or t.get("trade_id") for t in db_open}
+
+        orphaned_db = [t for t in db_open if (t.get("deal_id") or t.get("trade_id")) not in ig_deal_ids]
+        orphaned_ig = [t for t in open_ig if t.get("dealId") not in db_deal_ids]
+
+        if not orphaned_db and not orphaned_ig:
+            checks.append(f"✅ Position sync: {len(open_ig)} open, DB and IG match")
+        else:
+            if orphaned_db:
+                checks.append(f"⚠️ Position sync: {len(orphaned_db)} DB trades not on IG (auto-fixing)")
+                for t in orphaned_db:
+                    did = t.get("deal_id") or t.get("trade_id")
+                    storage.update_trade(did, {
+                        "closed_at": now.isoformat(),
+                        "close_reason": "Health audit reconciliation",
+                        "status": "CLOSED", "pl": 0,
+                    })
+            if orphaned_ig:
+                checks.append(f"⚠️ Position sync: {len(orphaned_ig)} IG positions not in DB")
+    except Exception as e:
+        checks.append(f"❌ Position sync: IG API error — {str(e)[:80]}")
+
+    # 2. IG API connectivity
+    try:
+        summary = broker.get_account_summary()
+        balance = summary.get("balance", 0)
+        checks.append(f"✅ IG API: connected, balance £{balance:.2f}")
+    except Exception as e:
+        checks.append(f"❌ IG API: {str(e)[:80]}")
+
+    # 3. MCP server
+    try:
+        import httpx
+        r = httpx.get(f"{MCP_SERVER_URL}/health", timeout=5)
+        if r.status_code == 200:
+            checks.append("✅ MCP Server: healthy")
+        else:
+            checks.append(f"⚠️ MCP Server: HTTP {r.status_code}")
+    except Exception as e:
+        checks.append(f"❌ MCP Server: unreachable — {str(e)[:50]}")
+
+    # 4. Config consistency — runtime vs YAML
+    try:
+        import yaml
+        with open(config.CONFIG_PATH) as f:
+            yaml_cfg = yaml.safe_load(f)
+
+        yaml_conf = yaml_cfg.get("confidence", {}).get("min_to_trade")
+        runtime_conf = config.MIN_CONFIDENCE_SCORE
+
+        if abs(float(yaml_conf or 0) - float(runtime_conf)) < 0.1:
+            checks.append(f"✅ Config sync: confidence {runtime_conf}% (YAML matches runtime)")
+        else:
+            checks.append(f"⚠️ Config drift: YAML={yaml_conf}% vs runtime={runtime_conf}%")
+    except Exception as e:
+        checks.append(f"⚠️ Config check: {str(e)[:50]}")
+
+    # 5. Today's trading summary
+    try:
+        today = now.strftime("%Y-%m-%d")
+        today_trades = storage.get_trades_for_date(today)
+        closed = [t for t in today_trades if t.get("closed_at")]
+        open_t = [t for t in today_trades if not t.get("closed_at")]
+        pl = sum(t.get("pl", 0) for t in closed)
+        wins = sum(1 for t in closed if (t.get("pl") or 0) > 0.01)
+        checks.append(
+            f"📊 Today: {len(closed)} closed ({wins}W), "
+            f"{len(open_t)} open, P&L: £{pl:.2f}"
+        )
+    except Exception:
+        checks.append("⚠️ Today's trades: could not query")
+
+    # 6. LSTM model status
+    try:
+        if lstm_predictor and lstm_predictor._loaded:
+            checks.append("✅ LSTM: model loaded and active")
+        else:
+            checks.append("⚠️ LSTM: model not loaded")
+    except Exception:
+        checks.append("⚠️ LSTM: status unknown")
+
+    # 7. Disabled directions/pairs
+    if config.DISABLED_DIRECTIONS:
+        checks.append(f"🚫 Disabled directions: {', '.join(sorted(config.DISABLED_DIRECTIONS))}")
+    if config.DISABLED_PAIRS:
+        checks.append(f"🚫 Disabled pairs: {', '.join(sorted(config.DISABLED_PAIRS))}")
+
+    # 8. Trading status
+    if _trading_paused:
+        checks.append("⏸ Trading: PAUSED")
+    else:
+        checks.append("▶️ Trading: ACTIVE")
+
+    # Send summary
+    all_ok = all("✅" in c or "📊" in c or "▶️" in c for c in checks)
+    status_emoji = "✅" if all_ok else "⚠️"
+
+    msg = (
+        f"*{status_emoji} DAILY HEALTH AUDIT*\n"
+        f"═════════════════════\n"
+        + "\n".join(checks)
+        + f"\n\n_{now.strftime('%H:%M UTC')}_"
+    )
+    notifier._send_system(msg)
+    logger.info(f"Daily health audit: {'all clear' if all_ok else 'issues found'}")
+
+
 def _get_mcp_context(pair: str) -> dict:
     """Fetch market context from the MCP server. Returns empty dict on failure."""
     try:
@@ -1454,6 +1584,20 @@ def main():
         daily_lstm_health,
         CronTrigger(hour=8, minute=0),
         id="daily_lstm_health", name="Daily LSTM Health"
+    )
+
+    # ── Proactive Health Audit — twice daily ──────────────────────────────
+    # Runs at 09:00 and 17:00 UTC to verify everything is in sync:
+    # DB vs IG positions, API connectivity, config consistency, LSTM status
+    scheduler.add_job(
+        daily_health_audit,
+        CronTrigger(hour=9, minute=0),
+        id="health_audit_morning", name="Health Audit (Morning)"
+    )
+    scheduler.add_job(
+        daily_health_audit,
+        CronTrigger(hour=17, minute=0),
+        id="health_audit_afternoon", name="Health Audit (Afternoon)"
     )
 
     logger.info("📅 Scheduler started with the following jobs:")

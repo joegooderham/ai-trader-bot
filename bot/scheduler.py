@@ -78,6 +78,12 @@ integrity_monitor = IntegrityMonitor(notifier=notifier)
 # Track last reported P&L per position to only alert on significant changes
 _last_reported_pl: dict = {}
 
+# Per-pair cooldown after stop-out — prevents churn spirals where the bot
+# re-enters the same pair immediately after being stopped out.
+# Maps pair -> datetime of last stop-loss hit.
+_pair_cooldowns: dict = {}
+COOLDOWN_MINUTES = 120  # Don't re-enter a pair for 2 hours after a stop-out
+
 MCP_SERVER_URL = "http://mcp-server:8090"
 
 # ── Static Correlation Matrix (BACKLOG-005) ──────────────────────────────────
@@ -462,6 +468,21 @@ def _evaluate_pair(pair: str, available_capital: float):
         )
         return
 
+    # Cooldown guard: don't re-enter a pair that was just stopped out.
+    # Prevents churn spirals (e.g. EUR_GBP entered 24 times in one day,
+    # each time stopped within minutes, same thesis, same outcome).
+    if pair in _pair_cooldowns:
+        elapsed = (datetime.now(timezone.utc) - _pair_cooldowns[pair]).total_seconds() / 60
+        if elapsed < COOLDOWN_MINUTES:
+            remaining = int(COOLDOWN_MINUTES - elapsed)
+            logger.info(
+                f"Skipping {pair} — cooldown active ({remaining}min remaining after stop-out)"
+            )
+            return
+        else:
+            # Cooldown expired, remove it
+            del _pair_cooldowns[pair]
+
     size, stop_loss_price, take_profit_price = calculate_position_size(
         pair=pair,
         direction=result.direction,
@@ -532,29 +553,66 @@ def _on_streaming_position_update(position: dict):
     # without this, the trade stays "open" in SQLite and the dashboard is wrong.
     if status == "DELETED":
         logger.info(f"Position closed via streaming: {pair} (deal {deal_id})")
-        # Persist the final P&L and close timestamp to the database
-        if deal_id:
-            try:
-                final_pl = upl or _last_reported_pl.get(deal_id, 0)
-                storage.update_trade_field(deal_id, "pl", final_pl)
-                storage.update_trade_field(deal_id, "closed_at", datetime.now(timezone.utc).isoformat())
-                storage.update_trade_field(deal_id, "status", "CLOSED")
-                storage.update_trade_field(deal_id, "close_reason", "stop_or_tp")
-                logger.info(f"Persisted close for {pair}: P&L £{final_pl:.2f}")
-            except Exception as e:
-                logger.warning(f"Failed to persist streaming close for {deal_id}: {e}")
         _last_reported_pl.pop(deal_id, None)
 
+        if not deal_id:
+            return
+
+        # Fetch the original trade from DB so we can calculate accurate P&L
+        # from fill_price vs close_price using the pip-based method.
+        # The streaming event often has upl=0 or missing closePrice, so we
+        # must compute P&L ourselves to avoid the £0.00 recording bug.
+        from risk.position_sizer import PIP_SIZE, DEFAULT_PIP_SIZE, IG_PIP_VALUE_GBP
+        db_trade = storage.get_trade_by_deal_id(deal_id)
         close_price = position.get("closePrice") or position.get("level")
-        pl = position.get("pl") or position.get("profit", 0)
-        storage.update_trade(deal_id, {
-            "close_price": close_price,
-            "pl": pl,
-            "closed_at": datetime.now(timezone.utc).isoformat(),
-            "close_reason": "Broker closed (stop/TP hit)",
-            "status": "CLOSED",
-        })
-        logger.info(f"DB updated for streamed close: {pair} deal={deal_id} pl={pl}")
+        direction = position.get("direction") or (db_trade.get("direction") if db_trade else None)
+
+        # Calculate P&L from prices if we have the original trade data
+        calculated_pl = 0.0
+        if db_trade and close_price and db_trade.get("fill_price"):
+            fill_price = db_trade["fill_price"]
+            pip_size = PIP_SIZE.get(pair, DEFAULT_PIP_SIZE)
+            pip_value = IG_PIP_VALUE_GBP.get(pair, 0.80)
+            # Look up the trade size — stored as "size" in DB
+            trade_size = db_trade.get("size", 1.0) or 1.0
+            if direction == "BUY":
+                pips_moved = (close_price - fill_price) / pip_size
+            else:
+                pips_moved = (fill_price - close_price) / pip_size
+            calculated_pl = round(pips_moved * pip_value * trade_size, 2)
+
+        # Use calculated P&L, fall back to streaming upl, then last reported
+        final_pl = calculated_pl or upl or 0
+
+        # Determine if stop-loss or take-profit was hit
+        hit_type = "stop/TP"
+        if db_trade and close_price:
+            sl = db_trade.get("stop_loss")
+            tp = db_trade.get("take_profit")
+            if sl and abs(close_price - sl) < PIP_SIZE.get(pair, DEFAULT_PIP_SIZE) * 2:
+                hit_type = "stop-loss"
+            elif tp and abs(close_price - tp) < PIP_SIZE.get(pair, DEFAULT_PIP_SIZE) * 2:
+                hit_type = "take-profit"
+
+        try:
+            storage.update_trade(deal_id, {
+                "close_price": close_price,
+                "pl": final_pl,
+                "closed_at": datetime.now(timezone.utc).isoformat(),
+                "close_reason": f"Broker closed ({hit_type} hit)",
+                "status": "CLOSED",
+            })
+            logger.info(
+                f"Streamed close: {pair} {direction} | {hit_type} hit | "
+                f"Close: {close_price} | P&L: £{final_pl:.2f}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist streaming close for {deal_id}: {e}")
+
+        # Record cooldown timestamp so the bot doesn't immediately re-enter
+        # this pair after a stop-out (prevents churn spirals)
+        if hit_type == "stop-loss":
+            _pair_cooldowns[pair] = datetime.now(timezone.utc)
 
         # Send Telegram notification so the user knows about stop/TP hits
         trade_num = storage.get_trade_number(deal_id)
@@ -564,10 +622,10 @@ def _on_streaming_position_update(position: dict):
             balance = None
         notifier.trade_closed(
             pair=pair,
-            direction=position.get("direction", "N/A"),
+            direction=direction or "N/A",
             close_price=close_price or 0,
-            pl=pl,
-            reason="Stop/TP hit (streaming)",
+            pl=final_pl,
+            reason=f"{hit_type.capitalize()} hit (streaming)",
             account_balance=balance,
             trade_number=trade_num,
         )

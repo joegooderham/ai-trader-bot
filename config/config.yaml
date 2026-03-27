@@ -31,7 +31,7 @@ trading:
   htf_conflict_penalty: 15
 confidence:
   aggressiveness_label: conservative
-  min_to_trade: 80
+  min_to_trade: 85
   hold_overnight_threshold: 65
   weights:
     lstm_model: 50

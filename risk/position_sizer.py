@@ -38,6 +38,25 @@ PIP_SIZE = {
 }
 DEFAULT_PIP_SIZE = 0.0001
 
+# Minimum stop-loss distance in pips per pair.
+# Prevents stops from being placed inside the spread + normal noise.
+# EUR_GBP has a typical spread of 1-2 pips — a 2.7-pip stop gets hit
+# by bid/ask fluctuation alone. These floors ensure stops are beyond
+# normal market noise for each pair's volatility profile.
+MIN_STOP_PIPS = {
+    "EUR_GBP": 20,      # Low-volatility pair, tight spread but noisy
+    "EUR_USD": 20,
+    "GBP_USD": 25,
+    "AUD_USD": 18,
+    "NZD_USD": 18,
+    "USD_CAD": 18,
+    "USD_CHF": 18,
+    "USD_JPY": 25,
+    "GBP_JPY": 35,      # High-volatility cross, needs wider stops
+    "EUR_JPY": 30,
+}
+DEFAULT_MIN_STOP_PIPS = 20
+
 
 def _get_tier(confidence_score: float) -> str:
     """Determine confidence tier: low (50-65), medium (66-80), high (81+)."""
@@ -108,9 +127,21 @@ def calculate_position_size(
     # Stop and take-profit distances based on ATR and confidence tier
     pip_size     = PIP_SIZE.get(pair, DEFAULT_PIP_SIZE)
     stop_dist    = atr * sl_atr_mult
-    tp_dist      = stop_dist * tp_ratio
     stop_pips    = stop_dist / pip_size if pip_size > 0 else 20.0
-    stop_pips    = max(stop_pips, 5.0)   # Never less than 5 pips stop
+
+    # Enforce per-pair minimum stop distance so stops are never inside
+    # the spread + normal noise. Without this, low-ATR pairs like EUR_GBP
+    # get 2-7 pip stops that are hit within minutes by normal fluctuation.
+    min_pips     = MIN_STOP_PIPS.get(pair, DEFAULT_MIN_STOP_PIPS)
+    if stop_pips < min_pips:
+        logger.info(
+            f"Stop floor: {pair} ATR-based stop {stop_pips:.1f} pips raised to "
+            f"minimum {min_pips} pips"
+        )
+        stop_pips = min_pips
+        stop_dist = stop_pips * pip_size  # Recalculate distance from floored pips
+
+    tp_dist      = stop_dist * tp_ratio
 
     # Stop-loss and take-profit price levels
     if direction == "BUY":

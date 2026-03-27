@@ -21,8 +21,8 @@ trading:
     overlap: -5
     london: 0
     new_york: 0
-    tokyo: 10
-    sydney: 15
+    tokyo: 3
+    sydney: 5
   session_jpy_exempt_from_tokyo: true
   lookback_candles: 60
   htf_timeframe: H4
@@ -31,7 +31,7 @@ trading:
   htf_conflict_penalty: 15
 confidence:
   aggressiveness_label: conservative
-  min_to_trade: 85
+  min_to_trade: 80
   hold_overnight_threshold: 65
   weights:
     lstm_model: 50
@@ -67,9 +67,9 @@ risk:
   daily_profit_target: 20
   sleep_protection:
     enabled: true
-    start_hour: 23    # UTC — start banking profits at 11pm
-    end_hour: 8       # UTC — stop at 8:30am (use 8, checked with 30 min buffer)
-    profit_threshold: 10  # Bank any position that hits £10 profit during sleep hours
+    start_hour: 23
+    end_hour: 8
+    profit_threshold: 10
   daily_loss_circuit_breaker_pct: 10.0
   trailing_stop_activation_atr: 2.0
   trailing_stop_trail_atr: 2.0

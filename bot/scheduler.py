@@ -41,6 +41,7 @@ from bot.engine.lstm import LSTMPredictor
 from bot.engine.lstm.drift import DriftDetector
 from bot.analytics.metrics import MetricsEngine
 from bot.analytics.integrity_monitor import IntegrityMonitor
+from bot.engine.agent_review import orchestrator_review, critic_review
 from broker.ig_streaming import IGStreamingClient
 import httpx
 
@@ -483,13 +484,87 @@ def _evaluate_pair(pair: str, available_capital: float):
             # Cooldown expired, remove it
             del _pair_cooldowns[pair]
 
+    # ── Agentic AI Review ─────────────────────────────────────────────────
+    # Run the Trade Orchestrator and Trade Critic personas via Claude API
+    # to get reasoned analysis before execution. Only fires for trades that
+    # passed the confidence threshold — typically 1-3 calls per scan cycle.
+    # Falls back gracefully if Claude is unavailable (uses rule-based score).
+    ai_reasoning = result.reasoning
+    final_score = result.score
+
+    try:
+        # Fetch open positions and recent trades for context
+        open_positions = broker.get_open_trades()
+        recent_trades = storage.get_trades_for_week()
+
+        # 1. Trade Orchestrator: synthesise all signals into a reasoned decision
+        orch = orchestrator_review(
+            pair=pair,
+            direction=result.direction,
+            confidence_score=result.score,
+            breakdown=result.breakdown,
+            indicators=ind,
+            ml_prediction=ml_prediction,
+            mcp_context=mcp_context,
+            open_positions=open_positions,
+        )
+
+        if not orch.get("proceed", True):
+            logger.info(f"Orchestrator SKIPPED {pair}: {orch.get('reasoning', '')[:150]}")
+            return
+
+        final_score = orch.get("adjusted_score", result.score)
+        ai_reasoning = orch.get("reasoning", result.reasoning)
+
+        # 2. Trade Critic: adversarial review — "what could go wrong?"
+        critic = critic_review(
+            pair=pair,
+            direction=result.direction,
+            confidence_score=final_score,
+            indicators=ind,
+            recent_trades=recent_trades,
+            open_positions=open_positions,
+        )
+
+        critic_adj = critic.get("adjustment", 0)
+        if critic_adj != 0:
+            final_score = max(0, final_score + critic_adj)
+            logger.info(
+                f"Critic adjusted {pair}: {critic_adj:+d} → {final_score:.1f}% | "
+                f"Verdict: {critic.get('verdict', '?')}"
+            )
+
+        # If critic says SKIP, respect that
+        if critic.get("verdict") == "SKIP":
+            logger.info(f"Critic SKIPPED {pair}: {critic.get('reasoning', '')[:150]}")
+            return
+
+        # Append critic risks to the reasoning for the Telegram notification
+        risks = critic.get("risks", [])
+        if risks:
+            ai_reasoning += f" | Risks: {'; '.join(risks[:2])}"
+
+        # Check if the adjusted score still meets the session minimum
+        if final_score < session_min:
+            logger.info(
+                f"AI review dropped {pair} below threshold: "
+                f"{result.score:.1f}% → {final_score:.1f}% (min: {session_min:.0f}%)"
+            )
+            return
+
+    except Exception as e:
+        # Agent review failed — proceed with rule-based score
+        logger.warning(f"Agent review failed for {pair}: {e} — using rule-based score")
+        final_score = result.score
+        ai_reasoning = result.reasoning
+
     size, stop_loss_price, take_profit_price = calculate_position_size(
         pair=pair,
         direction=result.direction,
         entry_price=ind.current_price,
         atr=ind.atr,
         available_capital=available_capital,
-        confidence_score=result.score
+        confidence_score=final_score
     )
 
     if size <= 0:
@@ -507,8 +582,8 @@ def _evaluate_pair(pair: str, available_capital: float):
     if trade_result:
         # Enrich trade_result with confidence data before persisting
         # These fields aren't available inside ig_client, so we add them here
-        trade_result["confidence_score"] = result.score
-        trade_result["reasoning"] = result.reasoning
+        trade_result["confidence_score"] = final_score
+        trade_result["reasoning"] = ai_reasoning
 
         trade_number = storage.save_trade(trade_result)
 
@@ -519,9 +594,9 @@ def _evaluate_pair(pair: str, available_capital: float):
             units=size,
             stop_loss=stop_loss_price,
             take_profit=take_profit_price,
-            confidence_score=result.score,
+            confidence_score=final_score,
             breakdown=result.breakdown,
-            reasoning=result.reasoning,
+            reasoning=ai_reasoning,
             trade_number=trade_number
         )
 

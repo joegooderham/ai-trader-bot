@@ -1433,8 +1433,20 @@ def daily_health_audit():
     7. Data source health
 
     Sends a single Telegram summary with pass/fail per check.
+    Skips on weekends when markets are closed and no positions are open.
     """
+    from bot.analytics.integrity_monitor import _forex_markets_open
+
     now = datetime.now(timezone.utc)
+
+    # Skip weekend health audits when nothing is open
+    if not _forex_markets_open(now):
+        today_trades = storage.get_trades_for_date(now.strftime("%Y-%m-%d"))
+        open_count = len([t for t in today_trades if not t.get("closed_at")])
+        if open_count == 0:
+            logger.debug("Health audit: markets closed, no positions — skipping")
+            return
+
     checks = []
 
     # 1. Position sync — DB vs IG
@@ -1858,10 +1870,12 @@ def main():
     )
 
     # ── Profit Integrity Monitor (proactive anomaly detection) ────────────
-    # Integrity review: aligned with scan interval so it only reviews after new data
+    # Integrity review: runs hourly (not every scan cycle).
+    # Was previously tied to SCAN_INTERVAL (15 min) = 96 messages/day.
+    # Now runs every 60 min with deduplication + market-hours gate.
     scheduler.add_job(
         integrity_hourly_review,
-        "interval", minutes=config.SCAN_INTERVAL_MINUTES,
+        "interval", minutes=60,
         id="integrity_hourly", name="Integrity Review"
     )
 

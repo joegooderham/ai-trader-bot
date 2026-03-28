@@ -39,6 +39,7 @@ All recommendations come with inline [✅ Approve] [❌ Reject] buttons.
 Config changes apply immediately at runtime AND persist to config.yaml.
 """
 
+import hashlib
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 from typing import Optional
@@ -46,6 +47,31 @@ from pathlib import Path
 
 from data.storage import TradeStorage
 from bot import config
+
+
+def _forex_markets_open(now: datetime = None) -> bool:
+    """
+    Check if forex markets are currently open.
+
+    Forex trades Sun 22:00 UTC → Fri 22:00 UTC continuously.
+    Returns False during the weekend gap (Fri 22:00 → Sun 22:00).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    weekday = now.weekday()  # Mon=0 ... Sun=6
+    hour = now.hour
+
+    # Friday after 22:00 UTC — markets closed
+    if weekday == 4 and hour >= 22:
+        return False
+    # Saturday — markets closed all day
+    if weekday == 5:
+        return False
+    # Sunday before 22:00 UTC — markets closed
+    if weekday == 6 and hour < 22:
+        return False
+
+    return True
 
 
 # ── Actionable Recommendations ────────────────────────────────────────────────
@@ -103,6 +129,18 @@ class IntegrityMonitor:
         self._applied_fixes: list[dict] = []
         # How long to wait before reviewing a fix's impact (hours)
         self._review_delay_hours = config._remediation_cfg.get("review_delay_hours", 4)
+        # Auto-expiry: revert auto-applied changes after N hours so yesterday's
+        # defensive adjustments don't carry into tomorrow's different conditions.
+        self._auto_expiry_hours = 12
+        # Hard floor: confidence cannot be lowered below this without explicit
+        # user approval via Telegram. Prevents the auto-optimiser from making
+        # the bot too aggressive.
+        self._confidence_floor = config._remediation_cfg.get("min_confidence_floor", 80)
+
+        # ── Spam Prevention ─────────────────────────────────────────────────
+        # Hash of the last sent report per type, so we only re-send when
+        # something actually changes. Prevents identical messages every 15 min.
+        self._last_report_hash: dict[str, str] = {}  # {"hourly": "abc123", "deep": "def456"}
 
     def _next_id(self) -> int:
         """Get the next action ID and increment."""
@@ -577,7 +615,11 @@ class IntegrityMonitor:
         """
         Analyse rolling 24h of trades for red flags.
         Uses smart analysis to diagnose root causes.
-        ALWAYS sends a Telegram report with inline buttons when actions exist.
+        Sends a Telegram report when issues change or actions are recommended.
+
+        Skips sending when:
+        - Forex markets are closed AND no open positions exist
+        - The report is identical to the last one sent (deduplication)
 
         Also reviews previously applied fixes to check if they're working.
         If a fix didn't improve things, it escalates automatically.
@@ -605,6 +647,17 @@ class IntegrityMonitor:
 
         # Count open positions
         open_count = len([t for t in today_trades if not t.get("closed_at")])
+
+        # ── Market-hours gate ──────────────────────────────────────────────
+        # When markets are closed and we have no open positions, there's
+        # nothing actionable to report. Log silently and skip the message.
+        if not _forex_markets_open(now) and open_count == 0:
+            logger.debug("Integrity hourly: markets closed, no positions — skipping report")
+            return {
+                "timestamp": now.isoformat(), "trades_24h": len(all_closed),
+                "trades_today": len(closed_trades), "open_positions": 0,
+                "issues": [], "actions": [], "status": "MARKETS_CLOSED",
+            }
 
         summary = {
             "timestamp": now.isoformat(),
@@ -824,9 +877,24 @@ class IntegrityMonitor:
     def deep_review(self) -> dict:
         """
         Comprehensive profitability and strategy effectiveness analysis.
-        ALWAYS sends a full report with per-pair breakdown and inline buttons.
+        Sends a report with per-pair breakdown and inline buttons.
+
+        Skips sending when markets are closed and no positions are open.
         """
         now = datetime.now(timezone.utc)
+
+        # ── Market-hours gate ──────────────────────────────────────────────
+        if not _forex_markets_open(now):
+            today_trades = self.storage.get_trades_for_date(now.strftime("%Y-%m-%d"))
+            open_count = len([t for t in today_trades if not t.get("closed_at")])
+            if open_count == 0:
+                logger.debug("Integrity deep: markets closed, no positions — skipping report")
+                return {
+                    "timestamp": now.isoformat(), "pair_analysis": {},
+                    "recommendations": [], "config_assessment": {},
+                    "status": "MARKETS_CLOSED",
+                }
+
         summary = {
             "timestamp": now.isoformat(),
             "pair_analysis": {},
@@ -1337,20 +1405,54 @@ class IntegrityMonitor:
 
         applied = []
         for action in list(actions):
+            # ── Confidence floor guard ─────────────────────────────────────
+            # The auto-optimiser cannot lower confidence below the floor
+            # (default 80%). This prevents it from making the bot too
+            # aggressive. Only the owner can lower it via Telegram command.
+            if (action.config_key == "min_to_trade"
+                    and action.config_value is not None
+                    and float(action.config_value) < self._confidence_floor):
+                logger.info(
+                    f"Blocked action #{action.action_id}: confidence {action.config_value}% "
+                    f"below floor {self._confidence_floor}% — needs owner approval"
+                )
+                applied.append(
+                    f"🚫 #{action.action_id} — {action.title} "
+                    f"(blocked: can't go below {self._confidence_floor}%)"
+                )
+                continue
+
+            # Capture the original value so we can revert after expiry
+            original_value = None
+            if action.action_type == "runtime_config_change" and action.config_key:
+                config_attr = {
+                    "min_to_trade": "MIN_CONFIDENCE_SCORE",
+                    "trailing_stop_trail_atr": "TRAILING_STOP_TRAIL_ATR",
+                    "trailing_stop_activation_atr": "TRAILING_STOP_ACTIVATION_ATR",
+                    "stop_loss_atr_multiplier": "STOP_LOSS_ATR_MULTIPLIER",
+                    "take_profit_ratio": "TAKE_PROFIT_RATIO",
+                    "per_trade_risk_pct": "PER_TRADE_RISK_PCT",
+                    "hold_overnight_threshold": "HOLD_OVERNIGHT_THRESHOLD",
+                }.get(action.config_key, "")
+                if config_attr:
+                    original_value = getattr(config, config_attr, None)
+
             try:
                 result = self.apply_action(action.action_id)
                 applied.append(f"✅ #{action.action_id} — {action.title}")
                 logger.info(f"Auto-approved action #{action.action_id}: {action.title}")
 
-                # Record the fix for later review
+                # Record the fix for later review + auto-expiry revert
                 self._applied_fixes.append({
                     "action_title": action.title,
                     "action_type": action.action_type,
                     "config_key": action.config_key,
                     "config_value": action.config_value,
+                    "original_value": original_value,
                     "applied_at": now,
                     "pre_fix_metrics": pre_fix_metrics,
                     "review_after": now + timedelta(hours=self._review_delay_hours),
+                    "expires_at": now + timedelta(hours=self._auto_expiry_hours),
                     "escalation_level": 0,
                     "reviewed": False,
                 })
@@ -1360,34 +1462,59 @@ class IntegrityMonitor:
 
         if applied and self.notifier:
             msg = (
-                f"*🤖 AUTO-OPTIMISE — {len(applied)} actions applied*\n"
+                f"*🤖 AUTO-OPTIMISE — {len(applied)} change{'s' if len(applied) > 1 else ''} applied*\n"
                 f"═════════════════════\n"
                 + "\n".join(applied)
-                + f"\n\n_Will review impact in {self._review_delay_hours}h. "
-                  f"If no improvement, will escalate automatically._"
+                + f"\n\n_Checking if this helps in {self._review_delay_hours}h. "
+                  f"Auto-reverts after {self._auto_expiry_hours}h so it doesn't "
+                  f"carry into different market conditions._"
                 + f"\n_{now.strftime('%H:%M UTC')}_"
             )
             self.notifier._send_system(msg)
 
     def review_applied_fixes(self):
-        """Review previously applied fixes to see if they actually helped.
+        """Review previously applied fixes and auto-expire stale ones.
 
-        Called by the hourly review. For each fix that's past its review time:
-        - Compare current metrics to pre-fix metrics
-        - If improved: log success, remove from tracking
-        - If not improved: escalate with a stronger action
+        Called by the hourly review. For each tracked fix:
 
-        Escalation ladder per problem type:
-          Level 0: Initial fix (e.g., raise confidence by 10%)
-          Level 1: Stronger fix (e.g., raise confidence by another 10%)
-          Level 2: Aggressive fix (e.g., disable the direction or pair entirely)
-          Level 3: Pause trading — something is fundamentally wrong
+        1. **Expired** (past expires_at): revert to original value so
+           yesterday's defensive adjustments don't carry into tomorrow.
+        2. **Past review time but not expired**: compare metrics to pre-fix.
+           If improved → keep (but still expires later). If not → escalate.
+        3. **Not yet time to review**: keep tracking.
         """
         now = datetime.now(timezone.utc)
         still_tracking = []
 
         for fix in self._applied_fixes:
             if fix["reviewed"]:
+                continue
+
+            # ── Auto-expiry: revert after 12h ─────────────────────────────
+            # Prevents yesterday's defensive changes from persisting into
+            # different market conditions the next day.
+            expires_at = fix.get("expires_at")
+            if expires_at and now >= expires_at:
+                original = fix.get("original_value")
+                config_key = fix.get("config_key")
+
+                if original is not None and config_key:
+                    try:
+                        config.apply_runtime_config(config_key, original)
+                        logger.info(
+                            f"Auto-expired: '{fix['action_title']}' — "
+                            f"reverted {config_key} to {original}"
+                        )
+                        if self.notifier:
+                            self.notifier._send_system(
+                                f"*🔄 AUTO-REVERT (12h expiry)*\n"
+                                f"_{fix['action_title']}_ has expired.\n"
+                                f"Reverted to previous setting.\n"
+                                f"_If the same issue reappears, the bot will re-apply it._"
+                            )
+                    except Exception as e:
+                        logger.error(f"Auto-expire revert failed for {config_key}: {e}")
+                fix["reviewed"] = True
                 continue
 
             # Not yet time to review
@@ -1408,13 +1535,15 @@ class IntegrityMonitor:
                 )
                 if self.notifier:
                     self.notifier._send_system(
-                        f"*✅ FIX WORKING*\n"
+                        f"*✅ Fix is working*\n"
                         f"_{fix['action_title']}_ applied {self._review_delay_hours}h ago\n"
                         f"Win rate: {pre['win_rate']:.0f}% → {current_metrics['win_rate']:.0f}%\n"
-                        f"Recent P&L: £{pre['recent_pl']:.2f} → £{current_metrics['recent_pl']:.2f}\n"
-                        f"_Keeping this change._"
+                        f"P&L: £{pre['recent_pl']:.2f} → £{current_metrics['recent_pl']:.2f}\n"
+                        f"_Keeping until it expires in "
+                        f"{int((fix.get('expires_at', now) - now).total_seconds() / 3600)}h._"
                     )
-                fix["reviewed"] = True
+                # Don't mark as reviewed — keep tracking until expiry
+                still_tracking.append(fix)
             else:
                 # Not improved — escalate
                 level = fix["escalation_level"] + 1
@@ -1601,61 +1730,88 @@ class IntegrityMonitor:
 
     def _send_hourly_report(self, summary: dict, issues: list[str],
                             actions: list[ActionableRecommendation]):
-        """Send the hourly integrity report. Always sends, with inline buttons when actions exist."""
+        """Send the hourly integrity report, with inline buttons when actions exist.
+
+        Deduplicates: if the status, issues, and action titles are identical to the
+        last sent report, skip sending to avoid spamming the same message every cycle.
+        Reports with actionable recommendations always send (user needs the buttons).
+        """
         if not self.notifier:
             return
 
+        # ── Deduplication ──────────────────────────────────────────────────
+        # Hash the meaningful content so we don't repeat identical messages.
+        # Always send if there are actions (user needs fresh inline buttons).
+        content_key = f"{summary.get('status')}|{sorted(issues)}|{summary.get('trades_24h')}|{summary.get('open_positions')}"
+        content_hash = hashlib.md5(content_key.encode()).hexdigest()
+        if not actions and content_hash == self._last_report_hash.get("hourly"):
+            logger.debug("Integrity hourly: unchanged from last report — skipping duplicate")
+            return
+        self._last_report_hash["hourly"] = content_hash
+
         now = datetime.now(timezone.utc)
         status = summary.get("status", "UNKNOWN")
-        status_emoji = {
-            "HEALTHY": "✅", "WARNING": "⚠️", "NO_TRADES": "📭"
-        }.get(status, "❓")
 
-        msg = (
-            f"*🔍 HOURLY INTEGRITY SCAN*\n"
-            f"═════════════════════\n"
-            f"*Status:* {status_emoji} {status}\n"
-            f"─────────────────────\n"
-        )
+        # ── Build a concise, plain-English summary ─────────────────────────
+        # Designed for someone who wants to know "am I making money?" and
+        # "does the bot need me to do anything?" — not technical jargon.
 
-        # Always show the numbers
-        msg += f"*📈 Last 24 Hours:*\n"
-        msg += f"  Trades closed: {summary.get('trades_24h', 0)}\n"
-        msg += f"  Trades today: {summary.get('trades_today', 0)}\n"
-        msg += f"  Open positions: {summary.get('open_positions', 0)}\n"
+        trades_24h = summary.get("trades_24h", 0)
+        trades_today = summary.get("trades_today", 0)
+        open_pos = summary.get("open_positions", 0)
+        pl = summary.get("net_pl_24h")
 
-        if summary.get("net_pl_24h") is not None:
-            pl = summary["net_pl_24h"]
+        # Status line — one sentence summary
+        if status == "NO_TRADES":
+            headline = "📭 *No trades in the last 24 hours*"
+            if now.weekday() >= 5:
+                headline += " (markets closed for the weekend)"
+            else:
+                headline += " — waiting for a strong enough signal"
+        elif status == "HEALTHY" and not issues:
+            headline = "✅ *All good — bot is trading normally*"
+        elif issues:
+            headline = f"⚠️ *{len(issues)} thing{'s' if len(issues) > 1 else ''} to watch*"
+        else:
+            headline = "🔍 *Hourly Check-In*"
+
+        msg = f"{headline}\n\n"
+
+        # Key numbers — P&L first (what the user cares about most)
+        if pl is not None:
             pl_sign = "+" if pl >= 0 else ""
-            msg += f"  Net P&L: *{pl_sign}£{pl:.2f}*\n"
+            pl_emoji = "📈" if pl >= 0 else "📉"
+            msg += f"{pl_emoji} *24h P&L: {pl_sign}£{pl:.2f}*\n"
+
+        if open_pos > 0:
+            msg += f"📊 {open_pos} position{'s' if open_pos > 1 else ''} open right now\n"
+
+        if trades_today > 0 or trades_24h > 0:
+            msg += f"🔄 {trades_today} trades today, {trades_24h} in last 24h\n"
 
         if summary.get("win_rate") is not None:
-            msg += f"  Win rate: {summary['win_rate']:.0f}%\n"
-        if summary.get("breakeven_count") is not None:
-            msg += f"  Breakeven: {summary['breakeven_count']}\n"
-        if summary.get("avg_duration_min") is not None:
-            msg += f"  Avg duration: {summary['avg_duration_min']:.0f} min\n"
-        if summary.get("max_consecutive_losses", 0) > 0:
-            msg += f"  Max losing streak: {summary['max_consecutive_losses']}\n"
+            wr = summary["win_rate"]
+            msg += f"🎯 Winning {wr:.0f}% of trades\n"
 
-        # Issues
+        if summary.get("max_consecutive_losses", 0) > 2:
+            msg += f"🔴 Lost {summary['max_consecutive_losses']} trades in a row\n"
+
+        # Issues — explained in plain English
         if issues:
-            msg += f"\n*⚠️ Issues ({len(issues)}):*\n"
+            msg += "\n*What's happening:*\n"
             for issue in issues:
-                msg += f"  • {issue}\n"
-        else:
-            msg += f"\n✅ No issues detected\n"
+                friendly = self._make_issue_friendly(issue)
+                msg += f"  • {friendly}\n"
 
-        # Actionable recommendations
+        # Recommendations — plain English with action buttons
         if actions:
-            msg += f"\n*💡 Actions Available:*\n"
+            msg += "\n*Suggested fixes:*\n"
             for a in actions:
-                msg += (
-                    f"\n*#{a.action_id}* — {a.title}\n"
-                    f"  _{a.detail}_\n"
-                )
-        else:
-            msg += f"\n✅ No changes recommended — current config is working\n"
+                friendly_detail = self._make_action_friendly(a)
+                msg += f"\n*#{a.action_id}* {a.title}\n  _{friendly_detail}_\n"
+            msg += "\n_Tap ✅ to apply a fix, or ❌ to dismiss._\n"
+        elif status != "NO_TRADES":
+            msg += "\n✅ No changes needed — settings are working well\n"
 
         msg += f"\n_{now.strftime('%H:%M UTC')}_"
 
@@ -1670,12 +1826,98 @@ class IntegrityMonitor:
         # Auto-approve: apply actions immediately without waiting for user
         self._auto_approve_actions(actions)
 
+    @staticmethod
+    def _make_issue_friendly(issue: str) -> str:
+        """Convert technical issue text into plain English."""
+        issue_upper = issue.upper()
+        if "BREAKEVEN STREAK" in issue_upper:
+            # Extract the fraction if present
+            return (
+                "Several trades are closing at exactly £0 profit. "
+                "The bot is opening trades but they're not moving enough to make money."
+            )
+        elif "WIN RATE COLLAPSE" in issue_upper:
+            return (
+                "Most recent trades are losing. The bot's signals "
+                "aren't matching what the market is doing right now."
+            )
+        elif "P&L DRIFT" in issue_upper:
+            return (
+                "Losses are adding up. The bot has lost more than 4% "
+                "of your capital in the last 24 hours."
+            )
+        elif "SHORT TRADE DURATION" in issue_upper:
+            return (
+                "Trades are closing too quickly (under 30 minutes). "
+                "This usually means stop-losses are set too tight."
+            )
+        elif "DIRECTION" in issue_upper and ("BUY" in issue_upper or "SELL" in issue_upper):
+            return (
+                "One direction is losing much more than the other. "
+                "The bot might do better temporarily trading only one way."
+            )
+        elif "CONCENTRATED" in issue_upper or "PAIR" in issue_upper:
+            return (
+                "Most losses are on one currency pair. "
+                "Removing it could stop the bleeding."
+            )
+        # Fallback — return as-is but lowercase for readability
+        return issue
+
+    @staticmethod
+    def _make_action_friendly(action: ActionableRecommendation) -> str:
+        """Convert technical action detail into plain English."""
+        title_lower = action.title.lower()
+        if "trailing stop" in title_lower or "trail" in title_lower:
+            return (
+                "Give trades more room to move before locking in profit. "
+                "Right now the bot is taking profits too early."
+            )
+        elif "confidence" in title_lower:
+            return (
+                "Only trade when the bot is more certain about the signal. "
+                "This means fewer trades but hopefully better ones."
+            )
+        elif "pause" in title_lower:
+            return (
+                "Stop trading temporarily while losses are reviewed. "
+                "Existing positions stay open — no new trades will be placed."
+            )
+        elif "disable" in title_lower and "buy" in title_lower:
+            return "Stop opening BUY trades for now — they've been losing consistently."
+        elif "disable" in title_lower and "sell" in title_lower:
+            return "Stop opening SELL trades for now — they've been losing consistently."
+        elif "remove" in title_lower:
+            return (
+                "Take this currency pair off the trading list. "
+                "It's been losing money consistently."
+            )
+        elif "stop" in title_lower and "loss" in title_lower:
+            return (
+                "Widen stop-losses so trades don't close too early from "
+                "normal market movement."
+            )
+        # Fallback
+        return action.detail
+
     def _send_deep_report(self, summary: dict, issues: list[str],
                           actions: list[ActionableRecommendation],
                           trades: list):
-        """Send the deep integrity report. Always sends, with inline buttons when actions exist."""
+        """Send the deep integrity report, with inline buttons when actions exist.
+
+        Deduplicates: skips if status and issues are identical to last deep report.
+        Always sends if there are actionable recommendations.
+        """
         if not self.notifier:
             return
+
+        # ── Deduplication ──────────────────────────────────────────────────
+        content_key = f"{summary.get('status')}|{sorted(issues)}|{len(trades)}"
+        content_hash = hashlib.md5(content_key.encode()).hexdigest()
+        if not actions and content_hash == self._last_report_hash.get("deep"):
+            logger.debug("Integrity deep: unchanged from last report — skipping duplicate")
+            return
+        self._last_report_hash["deep"] = content_hash
 
         now = datetime.now(timezone.utc)
         status = summary.get("status", "UNKNOWN")

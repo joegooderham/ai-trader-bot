@@ -1683,55 +1683,67 @@ class IntegrityMonitor:
 
         now = datetime.now(timezone.utc)
         status = summary.get("status", "UNKNOWN")
-        status_emoji = {
-            "HEALTHY": "✅", "WARNING": "⚠️", "NO_TRADES": "📭"
-        }.get(status, "❓")
 
-        msg = (
-            f"*🔍 HOURLY INTEGRITY SCAN*\n"
-            f"═════════════════════\n"
-            f"*Status:* {status_emoji} {status}\n"
-            f"─────────────────────\n"
-        )
+        # ── Build a concise, plain-English summary ─────────────────────────
+        # Designed for someone who wants to know "am I making money?" and
+        # "does the bot need me to do anything?" — not technical jargon.
 
-        # Always show the numbers
-        msg += f"*📈 Last 24 Hours:*\n"
-        msg += f"  Trades closed: {summary.get('trades_24h', 0)}\n"
-        msg += f"  Trades today: {summary.get('trades_today', 0)}\n"
-        msg += f"  Open positions: {summary.get('open_positions', 0)}\n"
+        trades_24h = summary.get("trades_24h", 0)
+        trades_today = summary.get("trades_today", 0)
+        open_pos = summary.get("open_positions", 0)
+        pl = summary.get("net_pl_24h")
 
-        if summary.get("net_pl_24h") is not None:
-            pl = summary["net_pl_24h"]
+        # Status line — one sentence summary
+        if status == "NO_TRADES":
+            headline = "📭 *No trades in the last 24 hours*"
+            if now.weekday() >= 5:
+                headline += " (markets closed for the weekend)"
+            else:
+                headline += " — waiting for a strong enough signal"
+        elif status == "HEALTHY" and not issues:
+            headline = "✅ *All good — bot is trading normally*"
+        elif issues:
+            headline = f"⚠️ *{len(issues)} thing{'s' if len(issues) > 1 else ''} to watch*"
+        else:
+            headline = "🔍 *Hourly Check-In*"
+
+        msg = f"{headline}\n\n"
+
+        # Key numbers — P&L first (what the user cares about most)
+        if pl is not None:
             pl_sign = "+" if pl >= 0 else ""
-            msg += f"  Net P&L: *{pl_sign}£{pl:.2f}*\n"
+            pl_emoji = "📈" if pl >= 0 else "📉"
+            msg += f"{pl_emoji} *24h P&L: {pl_sign}£{pl:.2f}*\n"
+
+        if open_pos > 0:
+            msg += f"📊 {open_pos} position{'s' if open_pos > 1 else ''} open right now\n"
+
+        if trades_today > 0 or trades_24h > 0:
+            msg += f"🔄 {trades_today} trades today, {trades_24h} in last 24h\n"
 
         if summary.get("win_rate") is not None:
-            msg += f"  Win rate: {summary['win_rate']:.0f}%\n"
-        if summary.get("breakeven_count") is not None:
-            msg += f"  Breakeven: {summary['breakeven_count']}\n"
-        if summary.get("avg_duration_min") is not None:
-            msg += f"  Avg duration: {summary['avg_duration_min']:.0f} min\n"
-        if summary.get("max_consecutive_losses", 0) > 0:
-            msg += f"  Max losing streak: {summary['max_consecutive_losses']}\n"
+            wr = summary["win_rate"]
+            msg += f"🎯 Winning {wr:.0f}% of trades\n"
 
-        # Issues
+        if summary.get("max_consecutive_losses", 0) > 2:
+            msg += f"🔴 Lost {summary['max_consecutive_losses']} trades in a row\n"
+
+        # Issues — explained in plain English
         if issues:
-            msg += f"\n*⚠️ Issues ({len(issues)}):*\n"
+            msg += "\n*What's happening:*\n"
             for issue in issues:
-                msg += f"  • {issue}\n"
-        else:
-            msg += f"\n✅ No issues detected\n"
+                friendly = self._make_issue_friendly(issue)
+                msg += f"  • {friendly}\n"
 
-        # Actionable recommendations
+        # Recommendations — plain English with action buttons
         if actions:
-            msg += f"\n*💡 Actions Available:*\n"
+            msg += "\n*Suggested fixes:*\n"
             for a in actions:
-                msg += (
-                    f"\n*#{a.action_id}* — {a.title}\n"
-                    f"  _{a.detail}_\n"
-                )
-        else:
-            msg += f"\n✅ No changes recommended — current config is working\n"
+                friendly_detail = self._make_action_friendly(a)
+                msg += f"\n*#{a.action_id}* {a.title}\n  _{friendly_detail}_\n"
+            msg += "\n_Tap ✅ to apply a fix, or ❌ to dismiss._\n"
+        elif status != "NO_TRADES":
+            msg += "\n✅ No changes needed — settings are working well\n"
 
         msg += f"\n_{now.strftime('%H:%M UTC')}_"
 
@@ -1745,6 +1757,80 @@ class IntegrityMonitor:
 
         # Auto-approve: apply actions immediately without waiting for user
         self._auto_approve_actions(actions)
+
+    @staticmethod
+    def _make_issue_friendly(issue: str) -> str:
+        """Convert technical issue text into plain English."""
+        issue_upper = issue.upper()
+        if "BREAKEVEN STREAK" in issue_upper:
+            # Extract the fraction if present
+            return (
+                "Several trades are closing at exactly £0 profit. "
+                "The bot is opening trades but they're not moving enough to make money."
+            )
+        elif "WIN RATE COLLAPSE" in issue_upper:
+            return (
+                "Most recent trades are losing. The bot's signals "
+                "aren't matching what the market is doing right now."
+            )
+        elif "P&L DRIFT" in issue_upper:
+            return (
+                "Losses are adding up. The bot has lost more than 4% "
+                "of your capital in the last 24 hours."
+            )
+        elif "SHORT TRADE DURATION" in issue_upper:
+            return (
+                "Trades are closing too quickly (under 30 minutes). "
+                "This usually means stop-losses are set too tight."
+            )
+        elif "DIRECTION" in issue_upper and ("BUY" in issue_upper or "SELL" in issue_upper):
+            return (
+                "One direction is losing much more than the other. "
+                "The bot might do better temporarily trading only one way."
+            )
+        elif "CONCENTRATED" in issue_upper or "PAIR" in issue_upper:
+            return (
+                "Most losses are on one currency pair. "
+                "Removing it could stop the bleeding."
+            )
+        # Fallback — return as-is but lowercase for readability
+        return issue
+
+    @staticmethod
+    def _make_action_friendly(action: ActionableRecommendation) -> str:
+        """Convert technical action detail into plain English."""
+        title_lower = action.title.lower()
+        if "trailing stop" in title_lower or "trail" in title_lower:
+            return (
+                "Give trades more room to move before locking in profit. "
+                "Right now the bot is taking profits too early."
+            )
+        elif "confidence" in title_lower:
+            return (
+                "Only trade when the bot is more certain about the signal. "
+                "This means fewer trades but hopefully better ones."
+            )
+        elif "pause" in title_lower:
+            return (
+                "Stop trading temporarily while losses are reviewed. "
+                "Existing positions stay open — no new trades will be placed."
+            )
+        elif "disable" in title_lower and "buy" in title_lower:
+            return "Stop opening BUY trades for now — they've been losing consistently."
+        elif "disable" in title_lower and "sell" in title_lower:
+            return "Stop opening SELL trades for now — they've been losing consistently."
+        elif "remove" in title_lower:
+            return (
+                "Take this currency pair off the trading list. "
+                "It's been losing money consistently."
+            )
+        elif "stop" in title_lower and "loss" in title_lower:
+            return (
+                "Widen stop-losses so trades don't close too early from "
+                "normal market movement."
+            )
+        # Fallback
+        return action.detail
 
     def _send_deep_report(self, summary: dict, issues: list[str],
                           actions: list[ActionableRecommendation],

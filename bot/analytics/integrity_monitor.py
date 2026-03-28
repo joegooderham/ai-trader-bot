@@ -39,6 +39,7 @@ All recommendations come with inline [✅ Approve] [❌ Reject] buttons.
 Config changes apply immediately at runtime AND persist to config.yaml.
 """
 
+import hashlib
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 from typing import Optional
@@ -46,6 +47,31 @@ from pathlib import Path
 
 from data.storage import TradeStorage
 from bot import config
+
+
+def _forex_markets_open(now: datetime = None) -> bool:
+    """
+    Check if forex markets are currently open.
+
+    Forex trades Sun 22:00 UTC → Fri 22:00 UTC continuously.
+    Returns False during the weekend gap (Fri 22:00 → Sun 22:00).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    weekday = now.weekday()  # Mon=0 ... Sun=6
+    hour = now.hour
+
+    # Friday after 22:00 UTC — markets closed
+    if weekday == 4 and hour >= 22:
+        return False
+    # Saturday — markets closed all day
+    if weekday == 5:
+        return False
+    # Sunday before 22:00 UTC — markets closed
+    if weekday == 6 and hour < 22:
+        return False
+
+    return True
 
 
 # ── Actionable Recommendations ────────────────────────────────────────────────
@@ -103,6 +129,11 @@ class IntegrityMonitor:
         self._applied_fixes: list[dict] = []
         # How long to wait before reviewing a fix's impact (hours)
         self._review_delay_hours = config._remediation_cfg.get("review_delay_hours", 4)
+
+        # ── Spam Prevention ─────────────────────────────────────────────────
+        # Hash of the last sent report per type, so we only re-send when
+        # something actually changes. Prevents identical messages every 15 min.
+        self._last_report_hash: dict[str, str] = {}  # {"hourly": "abc123", "deep": "def456"}
 
     def _next_id(self) -> int:
         """Get the next action ID and increment."""
@@ -577,7 +608,11 @@ class IntegrityMonitor:
         """
         Analyse rolling 24h of trades for red flags.
         Uses smart analysis to diagnose root causes.
-        ALWAYS sends a Telegram report with inline buttons when actions exist.
+        Sends a Telegram report when issues change or actions are recommended.
+
+        Skips sending when:
+        - Forex markets are closed AND no open positions exist
+        - The report is identical to the last one sent (deduplication)
 
         Also reviews previously applied fixes to check if they're working.
         If a fix didn't improve things, it escalates automatically.
@@ -605,6 +640,17 @@ class IntegrityMonitor:
 
         # Count open positions
         open_count = len([t for t in today_trades if not t.get("closed_at")])
+
+        # ── Market-hours gate ──────────────────────────────────────────────
+        # When markets are closed and we have no open positions, there's
+        # nothing actionable to report. Log silently and skip the message.
+        if not _forex_markets_open(now) and open_count == 0:
+            logger.debug("Integrity hourly: markets closed, no positions — skipping report")
+            return {
+                "timestamp": now.isoformat(), "trades_24h": len(all_closed),
+                "trades_today": len(closed_trades), "open_positions": 0,
+                "issues": [], "actions": [], "status": "MARKETS_CLOSED",
+            }
 
         summary = {
             "timestamp": now.isoformat(),
@@ -824,9 +870,24 @@ class IntegrityMonitor:
     def deep_review(self) -> dict:
         """
         Comprehensive profitability and strategy effectiveness analysis.
-        ALWAYS sends a full report with per-pair breakdown and inline buttons.
+        Sends a report with per-pair breakdown and inline buttons.
+
+        Skips sending when markets are closed and no positions are open.
         """
         now = datetime.now(timezone.utc)
+
+        # ── Market-hours gate ──────────────────────────────────────────────
+        if not _forex_markets_open(now):
+            today_trades = self.storage.get_trades_for_date(now.strftime("%Y-%m-%d"))
+            open_count = len([t for t in today_trades if not t.get("closed_at")])
+            if open_count == 0:
+                logger.debug("Integrity deep: markets closed, no positions — skipping report")
+                return {
+                    "timestamp": now.isoformat(), "pair_analysis": {},
+                    "recommendations": [], "config_assessment": {},
+                    "status": "MARKETS_CLOSED",
+                }
+
         summary = {
             "timestamp": now.isoformat(),
             "pair_analysis": {},
@@ -1601,9 +1662,24 @@ class IntegrityMonitor:
 
     def _send_hourly_report(self, summary: dict, issues: list[str],
                             actions: list[ActionableRecommendation]):
-        """Send the hourly integrity report. Always sends, with inline buttons when actions exist."""
+        """Send the hourly integrity report, with inline buttons when actions exist.
+
+        Deduplicates: if the status, issues, and action titles are identical to the
+        last sent report, skip sending to avoid spamming the same message every cycle.
+        Reports with actionable recommendations always send (user needs the buttons).
+        """
         if not self.notifier:
             return
+
+        # ── Deduplication ──────────────────────────────────────────────────
+        # Hash the meaningful content so we don't repeat identical messages.
+        # Always send if there are actions (user needs fresh inline buttons).
+        content_key = f"{summary.get('status')}|{sorted(issues)}|{summary.get('trades_24h')}|{summary.get('open_positions')}"
+        content_hash = hashlib.md5(content_key.encode()).hexdigest()
+        if not actions and content_hash == self._last_report_hash.get("hourly"):
+            logger.debug("Integrity hourly: unchanged from last report — skipping duplicate")
+            return
+        self._last_report_hash["hourly"] = content_hash
 
         now = datetime.now(timezone.utc)
         status = summary.get("status", "UNKNOWN")
@@ -1673,9 +1749,21 @@ class IntegrityMonitor:
     def _send_deep_report(self, summary: dict, issues: list[str],
                           actions: list[ActionableRecommendation],
                           trades: list):
-        """Send the deep integrity report. Always sends, with inline buttons when actions exist."""
+        """Send the deep integrity report, with inline buttons when actions exist.
+
+        Deduplicates: skips if status and issues are identical to last deep report.
+        Always sends if there are actionable recommendations.
+        """
         if not self.notifier:
             return
+
+        # ── Deduplication ──────────────────────────────────────────────────
+        content_key = f"{summary.get('status')}|{sorted(issues)}|{len(trades)}"
+        content_hash = hashlib.md5(content_key.encode()).hexdigest()
+        if not actions and content_hash == self._last_report_hash.get("deep"):
+            logger.debug("Integrity deep: unchanged from last report — skipping duplicate")
+            return
+        self._last_report_hash["deep"] = content_hash
 
         now = datetime.now(timezone.utc)
         status = summary.get("status", "UNKNOWN")

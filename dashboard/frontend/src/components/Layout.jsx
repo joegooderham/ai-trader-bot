@@ -42,6 +42,7 @@ const navGroups = [
     items: [
       { to: '/summary', label: 'Summary' },
       { to: '/wiki', label: 'Wiki' },
+      { to: '/wiki/project-roadmap', label: 'Roadmap' },
       { to: '/backlog', label: 'Backlog' },
     ],
   },

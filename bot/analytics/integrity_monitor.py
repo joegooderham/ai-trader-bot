@@ -129,6 +129,13 @@ class IntegrityMonitor:
         self._applied_fixes: list[dict] = []
         # How long to wait before reviewing a fix's impact (hours)
         self._review_delay_hours = config._remediation_cfg.get("review_delay_hours", 4)
+        # Auto-expiry: revert auto-applied changes after N hours so yesterday's
+        # defensive adjustments don't carry into tomorrow's different conditions.
+        self._auto_expiry_hours = 12
+        # Hard floor: confidence cannot be lowered below this without explicit
+        # user approval via Telegram. Prevents the auto-optimiser from making
+        # the bot too aggressive.
+        self._confidence_floor = config._remediation_cfg.get("min_confidence_floor", 80)
 
         # ── Spam Prevention ─────────────────────────────────────────────────
         # Hash of the last sent report per type, so we only re-send when
@@ -1398,20 +1405,54 @@ class IntegrityMonitor:
 
         applied = []
         for action in list(actions):
+            # ── Confidence floor guard ─────────────────────────────────────
+            # The auto-optimiser cannot lower confidence below the floor
+            # (default 80%). This prevents it from making the bot too
+            # aggressive. Only the owner can lower it via Telegram command.
+            if (action.config_key == "min_to_trade"
+                    and action.config_value is not None
+                    and float(action.config_value) < self._confidence_floor):
+                logger.info(
+                    f"Blocked action #{action.action_id}: confidence {action.config_value}% "
+                    f"below floor {self._confidence_floor}% — needs owner approval"
+                )
+                applied.append(
+                    f"🚫 #{action.action_id} — {action.title} "
+                    f"(blocked: can't go below {self._confidence_floor}%)"
+                )
+                continue
+
+            # Capture the original value so we can revert after expiry
+            original_value = None
+            if action.action_type == "runtime_config_change" and action.config_key:
+                config_attr = {
+                    "min_to_trade": "MIN_CONFIDENCE_SCORE",
+                    "trailing_stop_trail_atr": "TRAILING_STOP_TRAIL_ATR",
+                    "trailing_stop_activation_atr": "TRAILING_STOP_ACTIVATION_ATR",
+                    "stop_loss_atr_multiplier": "STOP_LOSS_ATR_MULTIPLIER",
+                    "take_profit_ratio": "TAKE_PROFIT_RATIO",
+                    "per_trade_risk_pct": "PER_TRADE_RISK_PCT",
+                    "hold_overnight_threshold": "HOLD_OVERNIGHT_THRESHOLD",
+                }.get(action.config_key, "")
+                if config_attr:
+                    original_value = getattr(config, config_attr, None)
+
             try:
                 result = self.apply_action(action.action_id)
                 applied.append(f"✅ #{action.action_id} — {action.title}")
                 logger.info(f"Auto-approved action #{action.action_id}: {action.title}")
 
-                # Record the fix for later review
+                # Record the fix for later review + auto-expiry revert
                 self._applied_fixes.append({
                     "action_title": action.title,
                     "action_type": action.action_type,
                     "config_key": action.config_key,
                     "config_value": action.config_value,
+                    "original_value": original_value,
                     "applied_at": now,
                     "pre_fix_metrics": pre_fix_metrics,
                     "review_after": now + timedelta(hours=self._review_delay_hours),
+                    "expires_at": now + timedelta(hours=self._auto_expiry_hours),
                     "escalation_level": 0,
                     "reviewed": False,
                 })
@@ -1421,34 +1462,59 @@ class IntegrityMonitor:
 
         if applied and self.notifier:
             msg = (
-                f"*🤖 AUTO-OPTIMISE — {len(applied)} actions applied*\n"
+                f"*🤖 AUTO-OPTIMISE — {len(applied)} change{'s' if len(applied) > 1 else ''} applied*\n"
                 f"═════════════════════\n"
                 + "\n".join(applied)
-                + f"\n\n_Will review impact in {self._review_delay_hours}h. "
-                  f"If no improvement, will escalate automatically._"
+                + f"\n\n_Checking if this helps in {self._review_delay_hours}h. "
+                  f"Auto-reverts after {self._auto_expiry_hours}h so it doesn't "
+                  f"carry into different market conditions._"
                 + f"\n_{now.strftime('%H:%M UTC')}_"
             )
             self.notifier._send_system(msg)
 
     def review_applied_fixes(self):
-        """Review previously applied fixes to see if they actually helped.
+        """Review previously applied fixes and auto-expire stale ones.
 
-        Called by the hourly review. For each fix that's past its review time:
-        - Compare current metrics to pre-fix metrics
-        - If improved: log success, remove from tracking
-        - If not improved: escalate with a stronger action
+        Called by the hourly review. For each tracked fix:
 
-        Escalation ladder per problem type:
-          Level 0: Initial fix (e.g., raise confidence by 10%)
-          Level 1: Stronger fix (e.g., raise confidence by another 10%)
-          Level 2: Aggressive fix (e.g., disable the direction or pair entirely)
-          Level 3: Pause trading — something is fundamentally wrong
+        1. **Expired** (past expires_at): revert to original value so
+           yesterday's defensive adjustments don't carry into tomorrow.
+        2. **Past review time but not expired**: compare metrics to pre-fix.
+           If improved → keep (but still expires later). If not → escalate.
+        3. **Not yet time to review**: keep tracking.
         """
         now = datetime.now(timezone.utc)
         still_tracking = []
 
         for fix in self._applied_fixes:
             if fix["reviewed"]:
+                continue
+
+            # ── Auto-expiry: revert after 12h ─────────────────────────────
+            # Prevents yesterday's defensive changes from persisting into
+            # different market conditions the next day.
+            expires_at = fix.get("expires_at")
+            if expires_at and now >= expires_at:
+                original = fix.get("original_value")
+                config_key = fix.get("config_key")
+
+                if original is not None and config_key:
+                    try:
+                        config.apply_runtime_config(config_key, original)
+                        logger.info(
+                            f"Auto-expired: '{fix['action_title']}' — "
+                            f"reverted {config_key} to {original}"
+                        )
+                        if self.notifier:
+                            self.notifier._send_system(
+                                f"*🔄 AUTO-REVERT (12h expiry)*\n"
+                                f"_{fix['action_title']}_ has expired.\n"
+                                f"Reverted to previous setting.\n"
+                                f"_If the same issue reappears, the bot will re-apply it._"
+                            )
+                    except Exception as e:
+                        logger.error(f"Auto-expire revert failed for {config_key}: {e}")
+                fix["reviewed"] = True
                 continue
 
             # Not yet time to review
@@ -1469,13 +1535,15 @@ class IntegrityMonitor:
                 )
                 if self.notifier:
                     self.notifier._send_system(
-                        f"*✅ FIX WORKING*\n"
+                        f"*✅ Fix is working*\n"
                         f"_{fix['action_title']}_ applied {self._review_delay_hours}h ago\n"
                         f"Win rate: {pre['win_rate']:.0f}% → {current_metrics['win_rate']:.0f}%\n"
-                        f"Recent P&L: £{pre['recent_pl']:.2f} → £{current_metrics['recent_pl']:.2f}\n"
-                        f"_Keeping this change._"
+                        f"P&L: £{pre['recent_pl']:.2f} → £{current_metrics['recent_pl']:.2f}\n"
+                        f"_Keeping until it expires in "
+                        f"{int((fix.get('expires_at', now) - now).total_seconds() / 3600)}h._"
                     )
-                fix["reviewed"] = True
+                # Don't mark as reviewed — keep tracking until expiry
+                still_tracking.append(fix)
             else:
                 # Not improved — escalate
                 level = fix["escalation_level"] + 1
